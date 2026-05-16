@@ -1,0 +1,124 @@
+name: terraform
+
+on:
+  pull_request:
+    paths:
+      - "**.tf"
+      - "**.tfvars.example"
+      - "**/model_defaults.yaml"
+      - "**/model_defaults.schema.json"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches: [main]
+    paths:
+      - "**.tf"
+      - "**/model_defaults.yaml"
+
+permissions:
+  id-token: write   # required for OIDC
+  contents: read
+  pull-requests: write
+
+env:
+  TF_VERSION: "1.9.8"
+  ARM_USE_OIDC: "true"
+  ARM_USE_AZUREAD: "true"
+
+jobs:
+  validate:
+    name: fmt + validate + lint + scan
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        env: [dev/platform, dev/team-a, dev/team-b, prod/platform, prod/team-a, prod/team-b]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: validate model_defaults.yaml
+        run: |
+          pip install --quiet check-jsonschema
+          check-jsonschema \
+            --schemafile modules/model-serving/model_defaults.schema.json \
+            modules/model-serving/model_defaults.yaml
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: terraform init
+        working-directory: environments/${{ matrix.env }}
+        env:
+          ARM_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: terraform init -input=false
+
+      - name: terraform validate
+        working-directory: environments/${{ matrix.env }}
+        run: terraform validate -no-color
+
+      - name: tflint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+      - run: tflint --recursive --minimum-failure-severity=error
+
+      - name: trivy (HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+
+  plan:
+    name: plan-${{ matrix.env }}
+    needs: validate
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        env: [dev/platform, dev/team-a, dev/team-b, prod/platform, prod/team-a, prod/team-b]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: terraform init
+        working-directory: environments/${{ matrix.env }}
+        env:
+          ARM_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: terraform init -input=false
+
+      - name: terraform plan
+        working-directory: environments/${{ matrix.env }}
+        env:
+          ARM_CLIENT_ID:           ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID:           ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID:     ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          TF_VAR_subscription_id:  ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          TF_VAR_databricks_account_id: ${{ secrets.DATABRICKS_ACCOUNT_ID }}
+          TF_VAR_dbx_account_admin_client_id:     ${{ secrets.DBX_ACCOUNT_ADMIN_CLIENT_ID }}
+          TF_VAR_dbx_account_admin_client_secret: ${{ secrets.DBX_ACCOUNT_ADMIN_CLIENT_SECRET }}
+        run: terraform plan -input=false -no-color

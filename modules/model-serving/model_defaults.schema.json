@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "model_defaults",
+  "description": "Schema for modules/model-serving/model_defaults.yaml — validated by check-jsonschema in pre-commit and CI.",
+  "type": "object",
+  "required": ["allowed_external_models", "allowed_foundation_entities", "external_endpoints", "foundation_endpoints", "disabled_foundation_models"],
+  "additionalProperties": false,
+  "properties": {
+    "allowed_external_models": {
+      "description": "Approved Azure OpenAI model names. Every model field in external_endpoints and additional_external_endpoints must be present here.",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "allowed_foundation_entities": {
+      "description": "Approved Databricks Foundation Model entity names. Every entity_name in foundation_endpoints and additional_foundation_endpoints must be present here.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^system\\.ai\\.[a-z0-9_]+$"
+      },
+      "uniqueItems": true
+    },
+    "external_endpoints": {
+      "description": "Azure OpenAI / AI Foundry model endpoints served via Databricks external model serving.",
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["model", "deployment_name", "task", "table_prefix"],
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "string",
+            "minLength": 1
+          },
+          "deployment_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "task": {
+            "type": "string",
+            "enum": ["llm/v1/chat", "llm/v1/completions", "llm/v1/embeddings"]
+          },
+          "table_prefix": {
+            "description": "Must be a valid Unity Catalog table-name component: lowercase letters, digits, underscores, starting with a letter.",
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$"
+          }
+        }
+      }
+    },
+    "foundation_endpoints": {
+      "description": "Databricks Foundation Model API endpoints (system.ai.* entity names).",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["entity_name", "entity_version"],
+        "additionalProperties": false,
+        "properties": {
+          "entity_name": {
+            "description": "Fully-qualified Foundation Model entity name, e.g. system.ai.claude_sonnet_4_6",
+            "type": "string",
+            "pattern": "^system\\.ai\\.[a-z0-9_]+$"
+          },
+          "entity_version": {
+            "description": "Entity version string (must be quoted in YAML to stay a string).",
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          }
+        }
+      }
+    },
+    "disabled_foundation_models": {
+      "description": "Foundation model endpoint names that are blocked workspace-wide (rate_limit = 0).",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    }
+  }
+}

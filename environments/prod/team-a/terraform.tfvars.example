@@ -1,0 +1,26 @@
+# NOTE: this file is gitignored. Replace placeholders with real values.
+location             = "eastus"
+resource_group_name  = "rg-dbx-prod"
+workspace_name       = "dbw-prod"
+sku                  = "premium"
+vnet_cidr            = "10.180.0.0/20"
+no_public_ip         = true
+public_network_access_enabled     = false
+infrastructure_encryption_enabled = true
+
+ai_foundry_name           = "aif-myorg-prod"
+ai_foundry_resource_group = "rg-aifoundry-prod"
+openai_api_version        = "2024-12-01-preview"
+inference_table_catalog   = "main"
+inference_table_schema    = "model_serving_logs"
+
+# Required (formerly missing) — supply via TF_VAR_* env vars in CI:
+# databricks_account_id = "..."
+# subscription_id       = "..."
+
+tags = {
+  environment      = "prod"
+  managed_by       = "terraform"
+  data_sensitivity = "public"
+  shortcode        = "aiml"
+}

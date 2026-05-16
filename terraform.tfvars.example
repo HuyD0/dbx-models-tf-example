@@ -1,0 +1,23 @@
+# Copy this file to terraform.tfvars and fill in your values.
+
+location             = "eastus"
+resource_group_name  = "rg-dbx-dev"
+workspace_name       = "dbw-myworkspace"
+sku                  = "premium"
+vnet_cidr            = "10.179.0.0/20"
+no_public_ip         = true
+public_network_access_enabled     = true
+infrastructure_encryption_enabled = true
+
+ai_foundry_name           = "aif-my-account"
+ai_foundry_resource_group = "rg-aifoundry"
+openai_api_version        = "2024-12-01-preview"
+inference_table_catalog   = "main"
+inference_table_schema    = "model_serving_logs"
+
+tags = {
+  environment      = "dev"
+  managed_by       = "terraform"
+  data_sensitivity = "public"
+  shortcode        = "aiml"
+}

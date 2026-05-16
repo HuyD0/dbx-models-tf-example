@@ -1,0 +1,93 @@
+# ── Model governance source of truth ────────────────────────────────────────
+# This file is the SINGLE source of truth for:
+#   • allowlisted external (Azure OpenAI) models
+#   • allowlisted Databricks Foundation Model API entities
+#   • blocklisted pre-provisioned `databricks-*` system endpoints
+#
+# Consumed by:
+#   • modules/model-serving/main.tf      → preconditions enforce allowlists,
+#                                          generates ai-gateway-config.json
+#                                          for the out-of-band script.
+#   • scripts/apply-ai-gateway.sh        → applies rate limits + inference
+#                                          tables + blocklist via REST API.
+#
+# When adding/removing a model, edit ONLY this file. Never duplicate these
+# lists in tfvars or bash scripts.
+
+# Approved external models (Azure OpenAI deployments). Any endpoint whose
+# `model` is not listed here fails `terraform plan`.
+allowed_external_models:
+  - gpt-4o
+  - gpt-5-mini
+  - gpt-5.4
+  - text-embedding-ada-002
+
+# Approved Databricks Foundation Model API entities. These are the real
+# system.ai.* names exactly as returned by GET /api/2.0/serving-endpoints.
+allowed_foundation_entities:
+  - system.ai.databricks-claude-sonnet-4-6
+  - system.ai.databricks-claude-opus-4-6
+  - system.ai.databricks-claude-opus-4-7
+
+# External (Azure OpenAI) endpoints created by the module as
+# databricks_model_serving resources. Each endpoint gets usage tracking,
+# inference tables, and the workspace-level rate limits.
+external_endpoints:
+  azure-gpt-4o:
+    model: gpt-4o
+    deployment_name: gpt-4o
+    task: llm/v1/chat
+    table_prefix: azure_gpt4o
+  azure-gpt-5-mini:
+    model: gpt-5-mini
+    deployment_name: gpt-5-mini
+    task: llm/v1/chat
+    table_prefix: azure_gpt5mini
+  azure-gpt-5-4:
+    model: gpt-5.4
+    deployment_name: gpt-5.4
+    task: llm/v1/chat
+    table_prefix: azure_gpt54
+  azure-text-embedding-ada-002:
+    model: text-embedding-ada-002
+    deployment_name: text-embedding-ada-002
+    task: llm/v1/embeddings
+    table_prefix: azure_embeddings
+
+# Pre-provisioned Databricks Foundation Model API endpoints to govern in
+# place. The `databricks-` name prefix is reserved by Databricks — these
+# endpoints exist automatically in every workspace and CANNOT be managed
+# with `databricks_model_serving`. Instead, scripts/apply-ai-gateway.sh
+# applies rate limits + inference tables via the REST API.
+#
+# `table_prefix` is the per-endpoint inference table name suffix (prepended
+# by the workspace prefix, e.g. team_a_).
+foundation_endpoints:
+  databricks-claude-sonnet-4-6:
+    table_prefix: databricks_claude_sonnet_4_6
+  databricks-claude-opus-4-6:
+    table_prefix: databricks_claude_opus_4_6
+  databricks-claude-opus-4-7:
+    table_prefix: databricks_claude_opus_4_7
+
+# Pre-provisioned `databricks-*` endpoints to BLOCK with rate_limit = 0.
+# Any request returns HTTP 429 immediately. Usage tracking stays on so
+# attempts are still recorded in system.serving.endpoint_usage.
+disabled_foundation_models:
+  - databricks-claude-sonnet-4-5
+  - databricks-claude-haiku-4-5
+  - databricks-claude-opus-4-5
+  - databricks-claude-opus-4-1
+  - databricks-claude-sonnet-4
+  - databricks-gpt-oss-120b
+  - databricks-gpt-oss-20b
+  - databricks-qwen3-next-80b-a3b-instruct
+  - databricks-qwen35-122b-a10b
+  - databricks-llama-4-maverick
+  - databricks-gemma-3-12b
+  - databricks-gte-large-en
+  - databricks-bge-large-en
+  - databricks-meta-llama-3-1-8b-instruct
+  - databricks-meta-llama-3-3-70b-instruct
+  - databricks-meta-llama-3.1-405b-instruct
+  - databricks-qwen3-embedding-0-6b

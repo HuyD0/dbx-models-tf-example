@@ -1,0 +1,49 @@
+# NOTE: this file is tracked in git as a safe template.
+# Copy to terraform.tfvars and fill in real values (terraform.tfvars is gitignored).
+
+team                   = "team-a"
+location               = "canadacentral"
+resource_group_name    = "rg-databricks-dev-team-a"
+workspace_name         = "dbw-dev-team-a"
+sku                    = "premium"
+vnet_cidr              = "10.180.0.0/20"
+no_public_ip           = true
+public_network_access_enabled     = true
+infrastructure_encryption_enabled = true
+
+uc_storage_account_name   = "dbwdevteamauc"
+ai_foundry_name           = "aif-myorg-dev"
+ai_foundry_resource_group = "rg-aifoundry-dev"
+openai_api_version        = "2024-12-01-preview"
+
+inference_table_catalog = "llmlogs_dev"
+inference_table_schema  = "model_serving_logs"
+
+model_serving_fallback_enabled = true
+model_serving_rate_limits = [
+  { calls = 60, key = "endpoint", renewal_period = "minute" },
+  { calls = 20, key = "user", renewal_period = "minute" },
+]
+
+# Required — supply via TF_VAR_* env vars in CI:
+# databricks_account_id = "<uuid>"
+# metastore_id          = "<uuid>"
+# subscription_id       = "<uuid>"
+
+workspace_groups           = ["ad-dbx-team-a"]
+consumer_groups            = []
+model_serving_admin_groups = ["ad-dbx"]
+contributor_group_object_id = "<aad-group-object-id>"
+
+create_main_catalog  = false
+enable_model_serving = true
+
+tags = {
+  environment      = "dev"
+  team             = "team-a"
+  managed_by       = "terraform"
+  data_sensitivity = "public"
+  owner            = "ad-dbx-team-a"
+  cost-center      = "team-a"
+  shortcode        = "aiml"
+}
