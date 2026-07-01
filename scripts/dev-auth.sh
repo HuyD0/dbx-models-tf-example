@@ -7,24 +7,34 @@
 # Prerequisites:
 #   - az login (as yourself) with read access to the Key Vault
 #   - bootstrap/main.tf has been applied (KV and secrets exist)
-
-set -euo pipefail
+#
+# NOTE: this script is meant to be *sourced*, so it deliberately does NOT use
+# `set -euo pipefail` — those options would leak into the caller's interactive
+# shell, breaking the prompt (`RPROMPT: parameter not set`) and closing the
+# terminal on the next non-zero command. Errors are checked explicitly instead.
 
 KV_NAME="kv-tfsp-ea936670"
 
+# `return` when sourced, `exit` when executed directly.
+_fail() { echo "ERROR: $*" >&2; return 1 2>/dev/null || exit 1; }
+
 echo "Fetching SP credentials from Key Vault '${KV_NAME}'..."
 
-export ARM_CLIENT_ID
-ARM_CLIENT_ID=$(az keyvault secret show \
+if ! ARM_CLIENT_ID=$(az keyvault secret show \
   --vault-name "${KV_NAME}" \
   --name "terraform-sp-client-id" \
-  --query value -o tsv)
+  --query value -o tsv); then
+  _fail "could not read terraform-sp-client-id from ${KV_NAME} — run 'az login' first."
+fi
+export ARM_CLIENT_ID
 
-export ARM_CLIENT_SECRET
-ARM_CLIENT_SECRET=$(az keyvault secret show \
+if ! ARM_CLIENT_SECRET=$(az keyvault secret show \
   --vault-name "${KV_NAME}" \
   --name "terraform-sp-secret" \
-  --query value -o tsv)
+  --query value -o tsv); then
+  _fail "could not read terraform-sp-secret from ${KV_NAME} — run 'az login' first."
+fi
+export ARM_CLIENT_SECRET
 
 export ARM_TENANT_ID="7f6a2cf9-5e4e-46ae-95d4-74016c1df1a6"
 export ARM_SUBSCRIPTION_ID="ea936670-dda1-4884-8467-49c225bf3e83"
