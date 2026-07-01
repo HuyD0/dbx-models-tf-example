@@ -1,12 +1,12 @@
 variable "team" {
-  description = "Team identifier for this workspace (e.g. 'team-a')."
+  description = "Team identifier for this workspace."
   type        = string
-  default     = "default"
+  default     = "dbx-dev"
 }
 
 variable "location" {
   type    = string
-  default = "eastus"
+  default = "eastus2"
 }
 
 variable "resource_group_name" {
@@ -29,7 +29,7 @@ variable "tags" {
 
 variable "vnet_cidr" {
   type    = string
-  default = "10.179.0.0/20"
+  default = "10.192.0.0/20"
 }
 
 variable "managed_resource_group_name" {
@@ -152,15 +152,15 @@ variable "consumer_groups" {
 }
 
 variable "create_main_catalog" {
-  description = "Whether to create the 'main' Unity Catalog catalog. Set false for spokes sharing the hub's main catalog."
+  description = "Whether to create the 'main' Unity Catalog catalog."
   type        = bool
   default     = true
 }
 
 variable "enable_model_serving" {
-  description = "Whether this workspace owns model serving endpoints. Set to false for consumer workspaces that call a shared LLM hub."
+  description = "Whether this workspace owns model serving endpoints."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "contributor_group_object_id" {
@@ -171,7 +171,7 @@ variable "contributor_group_object_id" {
 }
 
 variable "model_serving_admin_groups" {
-  description = "Account-level groups granted CAN_MANAGE on every model serving endpoint. Only platform team (ad-dbx) should manage endpoint lifecycle."
+  description = "Account-level groups granted CAN_MANAGE on every model serving endpoint."
   type        = list(string)
   default     = []
 }
@@ -180,4 +180,3 @@ variable "deployment_sp_client_id" {
   description = "Azure client ID of the deployment service principal (sp-terraform-databricks). Granted ADMIN on this workspace at creation time."
   type        = string
 }
-

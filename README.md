@@ -21,7 +21,7 @@ resource with inline `ai_gateway` configuration.
 All inference traffic flows through these endpoints with:
 
 - **Usage tracking** — every request is recorded in `system.serving.endpoint_usage`
-- **Inference tables** — full prompt/completion payloads written to Unity Catalog (`llmlogs`)
+- **Inference tables** — full prompt/completion payloads written to Unity Catalog (`main.model_serving_logs`)
 - **Model blocking** — non-approved foundation models are disabled by setting `rate_limits { calls = 0 }`, causing the API to return HTTP 429 on every attempt
 - **Rate limits** — per-endpoint and per-user call limits enforced at the gateway layer
 - **Fallback routing** — optional automatic retry across a secondary model on 5xx
@@ -60,14 +60,7 @@ The deployment supports three goals:
 bootstrap/                 # One-time remote state backend provisioning
 environments/
   account/                 # Account-level: metastore, AAD groups
-  dev/
-    platform/              # Dev platform workspace — owns inference catalog (no model serving)
-    team-a/                # Team-A workspace — model serving enabled
-    team-b/                # Team-B workspace — model serving enabled
-  prod/
-    platform/              # Prod platform workspace — owns inference catalog (no model serving)
-    team-a/                # Team-A workspace — model serving enabled
-    team-b/                # Team-B workspace — model serving enabled
+  dbx-dev/                 # Single workspace — owns main catalog + model serving
 modules/
   networking/              # VNet, subnets, NSGs (VNet injection)
   databricks-workspace/    # Workspace + Access Connector
@@ -81,30 +74,39 @@ docs/                      # Architecture, AI gateway, NIST mapping, operations
 
 ## Workspace strategy
 
-Three workspace roles are deployed per environment:
+A single workspace, `dbx-dev` (`environments/dbx-dev/`), owns everything
+directly: it creates and owns the `main` Unity Catalog catalog
+(`create_main_catalog = true`) and deploys the model-serving endpoints
+(`enable_model_serving = true`). Inference tables attach directly to the
+`main` catalog's `model_serving_logs` schema — there's no separate
+inference-only catalog and no cross-workspace writer grants to manage.
 
-| Role | Path | `enable_model_serving` | Purpose |
-|---|---|---|---|
-| **platform** | `environments/{env}/platform/` | `false` | Owns the centralised inference catalog (`llmlogs`). No model-serving endpoints. Admin-only read access. |
-| **team** | `environments/{env}/team-{x}/` | `true` | Owns `databricks_model_serving` endpoints with inline `ai_gateway` config. Each team controls its own rate limits, guardrails, and per-team overrides. Writes inference rows to the platform catalog. |
-
-Team workspaces are **independently deployed** — adding a new team creates its own resources without touching other workspaces. However, endpoint configuration is **centrally governed**: all teams share `modules/model-serving/model_defaults.yaml` as the single source of truth for approved model allowlists, the default endpoint catalog, and the foundation-model blocklist. A change to that file propagates to every team workspace on the next `terraform apply`. Teams can layer overrides on top via `model_serving_additional_external_endpoints` and `model_serving_rate_limits` in their own `terraform.tfvars`, but they cannot reference a model outside the centrally-approved allowlist — Terraform enforces this with a `lifecycle { precondition }` that fails the plan before any API call is made.
+Endpoint configuration is **centrally governed**: `dbx-dev` reads
+`modules/model-serving/model_defaults.yaml` as the single source of truth
+for approved model allowlists, the default endpoint catalog, and the
+foundation-model blocklist. A change to that file propagates on the next
+`terraform apply`. Overrides can be layered on top via
+`model_serving_additional_external_endpoints` and
+`model_serving_rate_limits` in `environments/dbx-dev/terraform.tfvars`, but
+it cannot reference a model outside the centrally-approved allowlist —
+Terraform enforces this with a `lifecycle { precondition }` that fails the
+plan before any API call is made.
 
 ### Endpoint ownership toggle
 
 The `workspace-stack` module exposes a single boolean:
 
 ```hcl
-enable_model_serving = true   # team — deploys databricks_model_serving endpoints
-enable_model_serving = false  # platform / consumer — no endpoints
+enable_model_serving = true   # dbx-dev — deploys databricks_model_serving endpoints
+enable_model_serving = false  # a consumer-only workspace with no endpoints, if ever added
 ```
 
-### What each team workspace deploys
+### What the dbx-dev workspace deploys
 
 | Resource | Details |
 |---|---|
 | Databricks workspace | Premium SKU, VNet-injected |
-| Unity Catalog | `main` catalog + writes to shared `llmlogs` inference catalog |
+| Unity Catalog | `main` catalog, owned directly, with a `model_serving_logs` schema for inference tables |
 | AAD application + SP | `<workspace-name>-model-serving` — granted **Cognitive Services OpenAI User** on the AI Foundry account |
 | External endpoints | `azure-gpt-4o`, `azure-gpt-5-mini`, `azure-gpt-5-4`, `azure-text-embedding-ada-002` (from `model_defaults.yaml`) — managed by Terraform |
 | Foundation endpoints | `databricks-claude-sonnet-4-6`, `databricks-claude-opus-4-6`, `databricks-claude-opus-4-7` (from `model_defaults.yaml`) — **pre-provisioned by Databricks**, governed out-of-band by `scripts/apply-ai-gateway.sh` (see [Foundation Model governance](#foundation-model-governance)) |
@@ -112,40 +114,38 @@ enable_model_serving = false  # platform / consumer — no endpoints
 
 ### Rate limits (defaults)
 
-Applied to every endpoint in each team workspace:
+Applied to every endpoint in the workspace:
 
 | Scope | Limit |
 |---|---|
 | `endpoint` | 60 calls / minute |
 | `user` | 20 calls / minute |
 
-Override via `model_serving_rate_limits` in each team's `terraform.tfvars`.
+Override via `model_serving_rate_limits` in `environments/dbx-dev/terraform.tfvars`.
 
 ### Access control — `consumer_groups`
 
-Any Databricks account-level group listed in `consumer_groups` on a team workspace is automatically granted:
+Any Databricks account-level group listed in `consumer_groups` on the
+`dbx-dev` workspace is automatically granted:
 
 - **`CAN_QUERY`** on every model serving endpoint
 - **`EXECUTE`** on every foundation model served entity
 
 Add a new consumer group by appending to the list and re-applying.
 
-### Deploying a team workspace
+### Deploying the dbx-dev workspace
 
 ```bash
-# Deploy dev team-a
-cd environments/dev/team-a
-cp ../../../terraform.tfvars.example terraform.tfvars
+cd environments/dbx-dev
+cp ../../terraform.tfvars.example terraform.tfvars
 # fill in subscription_id, databricks_account_id, metastore_id, ai_foundry_name
 terraform init
 terraform plan -out=tfplan
 terraform apply tfplan
-
-# Deploy dev team-b (same steps)
-cd environments/dev/team-b
 ```
 
-Deploy `environments/{env}/platform/` first — team workspaces reference the inference catalog it creates.
+Account must apply before `dbx-dev` — the workspace references the
+metastore that `environments/account/` creates.
 
 ## What this deploys
 
@@ -207,20 +207,13 @@ terraform init
 terraform apply
 METASTORE_ID=$(terraform output -raw metastore_id)
 
-# 3. Per-environment: deploy platform first, then team workspaces
-# Example: deploy dev
-cd ../environments/dev/platform
-cp ../../../terraform.tfvars.example terraform.tfvars
-# fill in subscription_id, databricks_account_id, metastore_id
+# 3. Deploy the dbx-dev workspace (account must apply first)
+cd ../environments/dbx-dev
+cp ../../terraform.tfvars.example terraform.tfvars
+# fill in subscription_id, databricks_account_id, metastore_id, ai_foundry_name
 terraform init
 terraform plan -out=tfplan -var="metastore_id=$METASTORE_ID"
 terraform apply tfplan
-
-# Then deploy team workspaces (can run in parallel)
-cd ../team-a
-cp ../../../terraform.tfvars.example terraform.tfvars
-# fill in ai_foundry_name in addition to the above
-terraform init && terraform apply -auto-approve
 ```
 
 The Databricks provider's `host` is derived from the workspace module
@@ -275,9 +268,9 @@ repo handles them through three layers, all driven by
 To run the reconciler manually (e.g. after an out-of-band UI change):
 
 ```bash
-scripts/apply-ai-gateway.sh                      # all dev + prod team workspaces
-scripts/apply-ai-gateway.sh dev/team-a           # a single env
-scripts/apply-ai-gateway.sh --dry-run dev/team-b # print payloads only
+scripts/apply-ai-gateway.sh                 # all workload workspaces (currently just dbx-dev)
+scripts/apply-ai-gateway.sh dbx-dev         # a single env
+scripts/apply-ai-gateway.sh --dry-run dbx-dev # print payloads only
 ```
 
 The YAML is validated by:
@@ -293,12 +286,12 @@ for the step-by-step workflow.
 
 | Name | Description | Default |
 |------|-------------|---------|
-| `location` | Azure region | `eastus` |
+| `location` | Azure region | `eastus2` |
 | `resource_group_name` | Resource group name | — |
 | `workspace_name` | Databricks workspace name | — |
 | `sku` | Workspace SKU (`standard`, `premium`, `trial`) | `premium` |
 | `tags` | Resource tags applied to all resources | `{}` |
-| `vnet_cidr` | VNet address space for VNet injection | `10.179.0.0/20` |
+| `vnet_cidr` | VNet address space for VNet injection | `10.192.0.0/20` |
 | `managed_resource_group_name` | Override the Databricks-managed RG name (null = auto) | `null` |
 | `no_public_ip` | Enable Secure Cluster Connectivity | `true` |
 | `public_network_access_enabled` | Allow public network access | `true` |

@@ -16,18 +16,18 @@
 #     └── disabled_foundation_models  → blocked (rate_limit = 0)
 #
 # Per-workspace input (from terraform output):
-#   workspace_url, inference_table_prefix (team_a/team_b/...),
-#   inference_table_catalog, inference_table_schema, rate_limits.
+#   workspace_url, inference_table_prefix, inference_table_catalog,
+#   inference_table_schema, rate_limits.
 #
 # Usage:
-#   scripts/apply-ai-gateway.sh                       # all dev + prod team workspaces
-#   scripts/apply-ai-gateway.sh dev/team-a            # a single env directory
-#   scripts/apply-ai-gateway.sh --dry-run dev/team-b  # print payloads, don't PUT
+#   scripts/apply-ai-gateway.sh                       # all workload workspaces
+#   scripts/apply-ai-gateway.sh dbx-dev                # a single env directory
+#   scripts/apply-ai-gateway.sh --dry-run dbx-dev      # print payloads, don't PUT
 #
 #   # Single-workspace mode (invoked by terraform_data.ai_gateway_reconciler):
 #   #   bypasses terraform output / tfvars discovery and uses env vars.
-#   WORKSPACE_URL=https://adb-…  TABLE_PREFIX=team_a \
-#     TABLE_CATALOG=llmlogs_dev TABLE_SCHEMA=model_serving_logs \
+#   WORKSPACE_URL=https://adb-…  TABLE_PREFIX=dbx-dev \
+#     TABLE_CATALOG=main TABLE_SCHEMA=model_serving_logs \
 #     scripts/apply-ai-gateway.sh --single-workspace
 #
 # Idempotency:
@@ -68,15 +68,15 @@ for cmd in "${REQUIRED[@]}"; do
 done
 [[ -f "$YAML" ]] || { echo "ERROR: $YAML not found" >&2; exit 1; }
 
-# ── Default targets: every team workspace under environments/{dev,prod}/ ────
+# ── Default targets: every workload workspace directly under environments/ ──
 if ! $SINGLE && [[ ${#TARGETS[@]} -eq 0 ]]; then
   while IFS= read -r d; do
     rel="${d#$REPO_ROOT/environments/}"
     case "$rel" in
-      */platform|account) continue ;;  # skip non-workload envs
+      account) continue ;;  # skip non-workload envs
     esac
     TARGETS+=("$rel")
-  done < <(find "$REPO_ROOT/environments" -mindepth 2 -maxdepth 2 -type d | sort)
+  done < <(find "$REPO_ROOT/environments" -mindepth 1 -maxdepth 1 -type d | sort)
 fi
 
 # ── Load desired state from YAML ─────────────────────────────────────────────

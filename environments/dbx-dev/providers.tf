@@ -16,9 +16,9 @@ terraform {
   }
   backend "azurerm" {
     resource_group_name  = "rg-terraform-state"
-    storage_account_name = "<YOUR_STATE_STORAGE_ACCOUNT>"
+    storage_account_name = "tfstatee18f8286"
     container_name       = "tfstate"
-    key                  = "databricks/dev/platform/terraform.tfstate"
+    key                  = "databricks/dbx-dev/terraform.tfstate"
     use_azuread_auth     = true
   }
 }
@@ -35,6 +35,8 @@ provider "azuread" {
 
 data "azurerm_client_config" "current" {}
 
+# Workspace-scoped Databricks provider — host derived from the workspace module
+# output so a single `terraform apply` provisions everything end-to-end.
 provider "databricks" {
   auth_type = "azure-client-secret"
   # Construct the ARM resource ID from variables rather than module outputs to
@@ -43,6 +45,7 @@ provider "databricks" {
   azure_workspace_resource_id = "/subscriptions/${var.subscription_id}/resourceGroups/${var.resource_group_name}/providers/Microsoft.Databricks/workspaces/${var.workspace_name}"
 }
 
+# Account-scoped Databricks provider — used for metastore + assignment.
 provider "databricks" {
   alias           = "accounts"
   auth_type       = "azure-client-secret"

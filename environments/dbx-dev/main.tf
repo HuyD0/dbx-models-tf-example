@@ -1,5 +1,5 @@
 module "stack" {
-  source = "../../../modules/workspace-stack"
+  source = "../../modules/workspace-stack"
 
   team        = var.team
   environment = "dev"
@@ -21,7 +21,6 @@ module "stack" {
   inference_table_schema      = var.inference_table_schema
   create_external_location    = true
   create_main_catalog         = var.create_main_catalog
-  create_inference_catalog    = false
   enable_model_serving        = var.enable_model_serving
   workspace_groups            = var.workspace_groups
   consumer_groups             = var.consumer_groups

@@ -12,7 +12,7 @@ terraform {
   }
   backend "azurerm" {
     resource_group_name  = "rg-terraform-state"
-    storage_account_name = "<YOUR_STATE_STORAGE_ACCOUNT>"
+    storage_account_name = "tfstatee18f8286"
     container_name       = "tfstate"
     key                  = "databricks/account/terraform.tfstate"
     use_azuread_auth     = true
