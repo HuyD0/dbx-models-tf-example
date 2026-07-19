@@ -1,20 +1,13 @@
 #!/usr/bin/env bash
-# redeploy.sh — full environment rebuild for the federated AI gateway layout.
+# redeploy.sh — full environment rebuild for the single-workspace layout.
 #
 # Deploy order (enforced by this script):
-#   1. bootstrap                       (state backend, one-time)
-#   2. environments/account            (metastore + account-level AAD groups)
-#   3. environments/<env>/platform     (central inference catalog `llmlogs`,
-#                                       admin-only read, writer grants for
-#                                       workload groups)
-#   4. environments/<env>/<team>       (per-team workspace + governed endpoints;
-#                                       writes inference rows into `llmlogs`
-#                                       prefixed by team name for cost
-#                                       allocation). Teams in the same env can
-#                                       be applied in any order once platform
-#                                       is up.
+#   1. bootstrap             (state backend, one-time)
+#   2. environments/account  (metastore + account-level AAD groups)
+#   3. environments/dbx-dev  (the single Databricks workspace: catalog +
+#                             governed model serving endpoints)
 #
-# Usage: ./scripts/redeploy.sh [--env dev|prod|all] [--skip-bootstrap] [--dry-run]
+# Usage: ./scripts/redeploy.sh [--skip-bootstrap] [--dry-run]
 set -euo pipefail
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -25,21 +18,13 @@ STATE_RG="rg-terraform-state"
 STATE_SA="<YOUR_STATE_STORAGE_ACCOUNT>"
 STATE_CONTAINER="tfstate"
 
-# Workload teams per environment. Adding a new team is a two-line change here
-# plus an entry in environments/<env>/platform/terraform.tfvars
-# (inference_writer_groups) so its serving SP can write to `llmlogs`.
-DEV_TEAMS=(team-a team-b)
-PROD_TEAMS=(team-a team-b)
-
 # ── Defaults ──────────────────────────────────────────────────────────────────
-ENV="all"
 SKIP_BOOTSTRAP=false
 DRY_RUN=false
 
 # ── Arg parsing ───────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --env)            ENV="$2";          shift 2 ;;
     --skip-bootstrap) SKIP_BOOTSTRAP=true; shift ;;
     --dry-run)        DRY_RUN=true;      shift ;;
     *) echo "Unknown flag: $1"; exit 1 ;;
@@ -158,34 +143,12 @@ if ! $DRY_RUN && $DBX_CLI; then
   ok "Account groups visible: $GROUP_COUNT"
 fi
 
-# ── 5. Platform env (central inference catalog) ──────────────────────────────
-# Must apply BEFORE any workload workspace in the same env, so `llmlogs` exists
-# when team endpoints attempt to register inference tables. Each platform env
-# also owns the writer grants for that env's workload groups.
-deploy_platform() {
-  local env_name="$1"
-  local dir="$REPO_ROOT/environments/$env_name/platform"
-  [[ -d "$dir" ]] || die "Missing platform env: $dir"
+# ── 5. Workspace (dbx-dev) ────────────────────────────────────────────────────
+deploy_workspace() {
+  local dir="$REPO_ROOT/environments/dbx-dev"
+  [[ -d "$dir" ]] || die "Missing workspace env: $dir"
 
-  log "Deploying platform: $env_name/platform"
-  tf_apply "$dir"
-
-  if $DRY_RUN; then return; fi
-
-  CATALOG=$(terraform -chdir="$dir" output -raw inference_catalog_name 2>/dev/null || true)
-  if [[ -n "$CATALOG" ]]; then
-    ok "Inference catalog ready: $CATALOG (admin-only read)"
-  fi
-}
-
-# ── 6. Workload (team) workspaces ─────────────────────────────────────────────
-deploy_team() {
-  local env_name="$1"
-  local team="$2"
-  local dir="$REPO_ROOT/environments/$env_name/$team"
-  [[ -d "$dir" ]] || { warn "Skipping missing env: $dir"; return; }
-
-  log "Deploying team workspace: $env_name/$team"
+  log "Deploying workspace: dbx-dev"
   tf_apply "$dir"
 
   if $DRY_RUN; then return; fi
@@ -199,7 +162,7 @@ deploy_team() {
   fi
   ok "Workspace URL: $WS_URL"
 
-  log "Waiting for $env_name/$team workspace to become Succeeded"
+  log "Waiting for dbx-dev workspace to become Succeeded"
   for i in $(seq 1 20); do
     STATE=$(az databricks workspace show --ids "$WS_ID" \
       --query "provisioningState" -o tsv 2>/dev/null || true)
@@ -212,35 +175,15 @@ deploy_team() {
   done
 
   if $DBX_CLI; then
-    log "Checking model serving endpoints — $env_name/$team"
+    log "Checking model serving endpoints — dbx-dev"
     databricks serving-endpoints list --host "$WS_URL" --output table 2>/dev/null \
       || warn "Could not list endpoints — auth with: databricks auth login --host $WS_URL"
   fi
 }
 
-# ── 7. Drive deploy order ─────────────────────────────────────────────────────
-deploy_env() {
-  local env_name="$1"
-  shift
-  local teams=("$@")
+deploy_workspace
 
-  deploy_platform "$env_name"
-  for team in "${teams[@]}"; do
-    deploy_team "$env_name" "$team"
-  done
-}
-
-case "$ENV" in
-  dev)  deploy_env dev  "${DEV_TEAMS[@]}"  ;;
-  prod) deploy_env prod "${PROD_TEAMS[@]}" ;;
-  all)
-    deploy_env dev  "${DEV_TEAMS[@]}"
-    deploy_env prod "${PROD_TEAMS[@]}"
-    ;;
-  *) die "Unknown --env value: $ENV (expected dev|prod|all)" ;;
-esac
-
-# ── 8. Final summary ──────────────────────────────────────────────────────────
+# ── 6. Final summary ──────────────────────────────────────────────────────────
 log "Deployment complete — listing Databricks resource groups"
 az group list \
   --subscription "$SUBSCRIPTION_ID" \

@@ -8,14 +8,18 @@ This project is a **PoC/design for Databricks AI Gateway and Model Serving**, de
 
 ## Workspace strategy
 
-Two workspace roles are deployed per environment:
+This repo deploys a single workspace, `environments/dbx-dev`, that owns both
+roles the module supports: it creates the `main` Unity Catalog catalog
+(`create_main_catalog = true`) and hosts AI Gateway model serving endpoints
+directly (`enable_model_serving = true`, the module default).
 
-| Role | Example | `enable_model_serving` | Purpose |
-|---|---|---|---|
-| **platform** | `dev/platform` | `false` | Owns the centralised inference catalog. No endpoints. Governs who can read/write inference logs. |
-| **team** | `dev/team-a`, `dev/team-b` | `true` (default) | Owns AI Gateway endpoints. Each team independently controls its endpoints, rate limits, and guardrails. Writes inference rows to the shared platform catalog. |
-
-Each team workspace is fully independent. Adding a new team deploys its own endpoint stack without touching any other workspace.
+The module also supports splitting these roles across multiple workspaces —
+e.g. a catalog-owning "platform" workspace (`enable_model_serving = false`,
+`create_main_catalog = false`, `create_inference_catalog = true`) plus one or
+more "team" workspaces that write inference rows into the platform's shared
+catalog via `inference_writer_groups` — for deployments that need per-team
+workspace isolation. This repo doesn't use that split; see
+`inference_admin_groups` / `inference_writer_groups` below if you need it.
 
 ---
 
@@ -79,48 +83,41 @@ Both are driven by the same `consumer_groups` and `model_serving_admin_groups` v
 ## Unity Catalog design
 
 ### Inference catalog ownership
-The `platform` workspace owns a dedicated inference catalog (e.g. `llmlogs`). Every team workspace model serving endpoint writes inference tables into this shared catalog using the schema `<inference_table_catalog>.<inference_table_schema>.<inference_table_prefix>_<model>`.
+`environments/dbx-dev` owns the `main` catalog directly (`create_main_catalog = true`, `inference_table_catalog = "main"`). Its model serving endpoints write inference tables into `main.model_serving_logs.<prefix>_<model>` — no separate catalog or cross-workspace writer grants are needed since there's only one workspace.
 
 ```
-platform workspace
-  └── Unity Catalog: llmlogs (owned here)
+dbx-dev workspace
+  └── Unity Catalog: main (owned here)
         └── schema: model_serving_logs
-              ├── team_a_gpt4o_payload
-              ├── team_a_llama3_payload
-              └── team_b_gpt4o_payload
-
-team-a workspace  ──writes──▶  llmlogs.model_serving_logs.*
-team-b workspace  ──writes──▶  llmlogs.model_serving_logs.*
+              ├── dbx_dev_gpt4o_payload
+              └── dbx_dev_llama3_payload
 ```
 
-Cross-workspace writes are enabled by adding the team workspace's service principal group to `inference_writer_groups` on the platform workspace. The platform workspace grants them `USE_CATALOG + USE_SCHEMA + MODIFY + CREATE_TABLE` — write only, no read.
-
-### Catalog per workspace
-Each team workspace creates its own `main` catalog for regular data and ML assets. The platform workspace sets `create_main_catalog = false` because it is not a compute workspace — it exists purely for catalog governance.
+The `inference_writer_groups` / `inference_admin_groups` variables exist for the multi-workspace split described above (a catalog-owning "platform" workspace granting write access to separate "team" workspaces) — this repo's single workspace doesn't need them.
 
 ---
 
 ## Usage
 
-**Team workspace with AI Gateway endpoints**:
+**Single workspace owning its own catalog + AI Gateway endpoints** (this repo's `environments/dbx-dev`):
 
 ```hcl
 module "stack" {
-  source = "../../../modules/workspace-stack"
+  source = "../../modules/workspace-stack"
 
-  team        = "team-a"
+  team        = "dbx-dev"
   environment = "dev"
   location    = var.location
 
-  resource_group_name  = var.resource_group_name
-  workspace_name       = var.workspace_name
-  vnet_cidr            = var.vnet_cidr
-  metastore_id         = var.metastore_id
+  resource_group_name = var.resource_group_name
+  workspace_name      = var.workspace_name
+  vnet_cidr           = var.vnet_cidr
+  metastore_id        = var.metastore_id
 
-  # Writes inference logs to the platform-owned catalog
-  inference_table_catalog = "llmlogs"
+  # Owns the `main` catalog directly — no separate platform workspace
+  inference_table_catalog = "main"
   inference_table_schema  = "model_serving_logs"
-  create_inference_catalog = false
+  create_main_catalog     = true
 
   # Azure AI Foundry backed endpoints
   ai_foundry_name           = var.ai_foundry_name
@@ -137,7 +134,7 @@ module "stack" {
     output = { safety = true }
   }
 
-  consumer_groups            = ["ad-team-b"]
+  workspace_groups           = ["ad-dbx"]
   model_serving_admin_groups = ["ad-dbx"]
 
   providers = {

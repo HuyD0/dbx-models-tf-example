@@ -176,7 +176,6 @@ resource "databricks_mws_permission_assignment" "workspace_access" {
 
 resource "databricks_grant" "metastore" {
   for_each  = local.uc_write_groups
-  provider  = databricks.accounts
   metastore = var.metastore_id
   principal = each.value
   # Least privilege: team groups may create catalogs in their own workspace.

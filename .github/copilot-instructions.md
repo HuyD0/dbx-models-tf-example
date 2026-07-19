@@ -47,16 +47,18 @@ ask whether it maps to one of the in-scope areas before proceeding.
 
 - **Modules** live in `modules/` and are composed by `modules/workspace-stack`.
   Prefer extending existing modules over creating new top-level modules.
-- **Environments** under `environments/<env>/<team-or-hub>/` each have their
-  own `providers.tf`, `terraform.tfvars`, and remote state config.
+- **Environments** under `environments/<env>/` each have their own
+  `providers.tf`, `terraform.tfvars`, and remote state config.
   `environments/account/` is account-scoped (metastore, AAD groups);
-  workspace-scoped resources go under `dev/`/`prod/`.
+  `environments/dbx-dev/` is the single workspace-scoped environment —
+  it owns the `main` Unity Catalog catalog directly and its own model
+  serving endpoints.
 - **Provider aliases**: use the account-level Databricks provider for
   metastores, groups, and metastore assignments; use the workspace-level
   provider for catalogs, schemas, grants, endpoints, jobs.
-- **Model serving** is enabled in team workspaces (`team-a`, `team-b`).
-  The `platform` workspace never owns endpoints — its role is inference
-  catalog governance. Do not add serving endpoints to `platform`.
+- **Model serving** is enabled directly on the `dbx-dev` workspace
+  (`enable_model_serving = true`); there is no separate catalog-only
+  "platform" workspace in this repo.
 - **Secrets**: never inline credentials. Use Azure Key Vault + Databricks
   secret scopes, surfaced as `{{secrets/scope/key}}` references in
   endpoint configs.

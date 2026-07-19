@@ -1,20 +1,22 @@
 variable "team" {
-  description = "Team identifier for this workspace (e.g. 'team-a')."
+  description = "Team identifier for this workspace."
   type        = string
-  default     = "default"
+  default     = "dbx-dev"
 }
 
 variable "location" {
   type    = string
-  default = "eastus"
+  default = "eastus2"
 }
 
 variable "resource_group_name" {
-  type = string
+  type    = string
+  default = "rg-databricks-dbx-dev"
 }
 
 variable "workspace_name" {
-  type = string
+  type    = string
+  default = "dbx-dev"
 }
 
 variable "sku" {
@@ -29,7 +31,7 @@ variable "tags" {
 
 variable "vnet_cidr" {
   type    = string
-  default = "10.179.0.0/20"
+  default = "10.192.0.0/20"
 }
 
 variable "managed_resource_group_name" {
@@ -54,11 +56,13 @@ variable "infrastructure_encryption_enabled" {
 }
 
 variable "ai_foundry_name" {
-  type = string
+  type    = string
+  default = "aif-huy-dev"
 }
 
 variable "ai_foundry_resource_group" {
-  type = string
+  type    = string
+  default = "rg-aifoundry-dev"
 }
 
 variable "openai_api_version" {
@@ -152,15 +156,15 @@ variable "consumer_groups" {
 }
 
 variable "create_main_catalog" {
-  description = "Whether to create the 'main' Unity Catalog catalog. Set false for spokes sharing the hub's main catalog."
+  description = "Whether to create the 'main' Unity Catalog catalog."
   type        = bool
   default     = true
 }
 
 variable "enable_model_serving" {
-  description = "Whether this workspace owns model serving endpoints. Set to false for consumer workspaces that call a shared LLM hub."
+  description = "Whether this workspace owns model serving endpoints."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "contributor_group_object_id" {
@@ -171,7 +175,7 @@ variable "contributor_group_object_id" {
 }
 
 variable "model_serving_admin_groups" {
-  description = "Account-level groups granted CAN_MANAGE on every model serving endpoint. Only platform team (ad-dbx) should manage endpoint lifecycle."
+  description = "Account-level groups granted CAN_MANAGE on every model serving endpoint."
   type        = list(string)
   default     = []
 }
@@ -181,3 +185,19 @@ variable "deployment_sp_client_id" {
   type        = string
 }
 
+variable "databricks_auth_type" {
+  description = <<-EOT
+    Databricks provider auth strategy. Defaults to `azure-client-secret`, which
+    reads ARM_CLIENT_ID / ARM_CLIENT_SECRET / ARM_TENANT_ID as exported by
+    scripts/dev-auth.sh. CI sets this to `github-oidc-azure` so the workflow
+    authenticates via the GitHub Actions OIDC token (ACTIONS_ID_TOKEN_REQUEST_*)
+    and needs no client secret.
+  EOT
+  type        = string
+  default     = "azure-client-secret"
+
+  validation {
+    condition     = contains(["azure-client-secret", "github-oidc-azure", "azure-cli"], var.databricks_auth_type)
+    error_message = "databricks_auth_type must be one of: azure-client-secret, github-oidc-azure, azure-cli."
+  }
+}

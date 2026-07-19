@@ -1,8 +1,8 @@
 # Model Serving
 
 This is the heart of the project. The
-[`modules/model-serving`](../modules/model-serving) module turns **each
-team workspace** into a self-contained OpenAI-compatible gateway in
+[`modules/model-serving`](../modules/model-serving) module turns the
+`dbx-dev` workspace into a self-contained OpenAI-compatible gateway in
 front of:
 
 - **Azure AI Foundry** deployments (GPT-4o, GPT-5-mini, GPT-5.4,
@@ -19,11 +19,12 @@ front of:
 
 Every endpoint has the AI gateway turned on with **usage tracking**,
 **rate limits**, and (for external endpoints) **inference tables**.
-Inference tables from every team workspace land in **one shared Unity
-Catalog catalog `llmlogs`** owned by the `platform` workspace, with
-table names prefixed by `inference_table_prefix` (e.g. `team_a_`,
-`team_b_`) so cost can be attributed per workspace/app without
-requiring a separate endpoint per team.
+Inference tables land directly in the `main` Unity Catalog catalog that
+`dbx-dev` owns (`inference_table_catalog = "main"`), under the
+`model_serving_logs` schema. `inference_table_prefix` still exists as a
+mechanism on the module — e.g. for allocating cost by application within
+this single workspace — but there's no longer a per-team prefix need
+since there's only one workspace.
 
 ---
 
@@ -215,45 +216,33 @@ latency to:
 <inference_table_catalog>.<inference_table_schema>.<workspace_prefix><table_prefix>_payload
 ```
 
-Defaults in this repo: `llmlogs.model_serving_logs.<workspace>_<prefix>_payload`
-where `<workspace>` comes from `var.inference_table_prefix` (auto-derived
-from `var.team` in `workspace-stack`, sanitised to `[a-z0-9_]`). Example:
-`llmlogs.model_serving_logs.team_a_azure_gpt4o_payload`.
+Defaults in this repo: `main.model_serving_logs.<prefix>_payload`, where
+`<prefix>` is the endpoint's `table_prefix` from `model_defaults.yaml`
+(optionally combined with `var.inference_table_prefix` if set). Example:
+`main.model_serving_logs.azure_gpt4o_payload`.
 
-The `llmlogs` catalog and its schema are owned by the `platform`
-workspace (`environments/<env>/platform/`); team workspaces only have
-the minimum grants needed to register and write tables
-(`USE_CATALOG`, `USE_SCHEMA`, `MODIFY`, `CREATE_TABLE`). They cannot
-`SELECT` from these tables — reads are admin-only. Tables can take a
-few minutes to materialise after an endpoint is first created.
+The `main` catalog and its `model_serving_logs` schema are owned directly
+by the `dbx-dev` workspace (`create_main_catalog = true`), so there are no
+cross-workspace writer grants to manage — `workspace_groups` on `dbx-dev`
+already get `ALL_PRIVILEGES` on the catalog, including `SELECT`. Tables can
+take a few minutes to materialise after an endpoint is first created.
 
 > Foundation endpoints do **not** support inference tables. To capture
 > Claude prompts/completions, route them through the fallback router or
 > add an MLflow tracing layer on the caller side.
 
-#### Per-workspace cost allocation
+#### Per-application cost allocation
 
-Because every team's tables live in the same catalog but under their
-own prefix, a single SQL query gives you per-workspace cost:
-
-```sql
-SELECT
-  CASE
-    WHEN table_name LIKE 'team_a_%' THEN 'team-a'
-    WHEN table_name LIKE 'team_b_%' THEN 'team-b'
-    ELSE 'other'
-  END AS workspace,
-  SUM(response:usage.prompt_tokens)     AS prompt_tokens,
-  SUM(response:usage.completion_tokens) AS completion_tokens
-FROM llmlogs.model_serving_logs.team_a_azure_gpt4o_payload
-UNION ALL
-SELECT 'team-b', SUM(...), SUM(...)
-FROM llmlogs.model_serving_logs.team_b_azure_gpt4o_payload;
-```
-
-For per-application chargeback within a workspace, have apps pass an
-`X-App-ID` header — it lands in `request_metadata` (see
-[access-control.md](access-control.md#cost-allocation-by-application)).
+With a single workspace there's no more need to break costs down by
+team/workspace prefix — the multi-team example that used to live here
+(`table_name LIKE 'team_a_%' / 'team_b_%'`) no longer applies. Since all
+requests already land in the same `main.model_serving_logs` schema, the
+straightforward way to allocate cost within `dbx-dev` is per-application,
+by having apps pass an `X-App-ID` header — it lands in `request_metadata`
+(see [access-control.md](access-control.md#cost-allocation-by-application)
+for the query). `inference_table_prefix` still exists as a mechanism on the
+module if per-app table separation is ever wanted instead of a header-based
+split.
 
 ### 2.3 Rate limits (`rate_limits`)
 

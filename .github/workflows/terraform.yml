@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        env: [dev/platform, dev/team-a, dev/team-b, prod/platform, prod/team-a, prod/team-b]
+        env: [dbx-dev, dbx-uat]
     steps:
       - uses: actions/checkout@v4
 
@@ -88,7 +88,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        env: [dev/platform, dev/team-a, dev/team-b, prod/platform, prod/team-a, prod/team-b]
+        env: [dbx-dev, dbx-uat]
     steps:
       - uses: actions/checkout@v4
 
@@ -114,11 +114,18 @@ jobs:
       - name: terraform plan
         working-directory: environments/${{ matrix.env }}
         env:
-          ARM_CLIENT_ID:           ${{ secrets.AZURE_CLIENT_ID }}
-          ARM_TENANT_ID:           ${{ secrets.AZURE_TENANT_ID }}
-          ARM_SUBSCRIPTION_ID:     ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          TF_VAR_subscription_id:  ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          TF_VAR_databricks_account_id: ${{ secrets.DATABRICKS_ACCOUNT_ID }}
-          TF_VAR_dbx_account_admin_client_id:     ${{ secrets.DBX_ACCOUNT_ADMIN_CLIENT_ID }}
-          TF_VAR_dbx_account_admin_client_secret: ${{ secrets.DBX_ACCOUNT_ADMIN_CLIENT_SECRET }}
+          ARM_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          # The Databricks provider authenticates with the GitHub Actions OIDC
+          # token (ACTIONS_ID_TOKEN_REQUEST_*, available because this workflow
+          # requests `id-token: write`) rather than a client secret. Locally the
+          # variable defaults to azure-client-secret for scripts/dev-auth.sh.
+          TF_VAR_databricks_auth_type: github-oidc-azure
+          # Names and CIDRs are defaulted per-env in variables.tf; only these
+          # two identifiers are injected, since terraform.tfvars is gitignored.
+          TF_VAR_subscription_id:         ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          TF_VAR_databricks_account_id:   ${{ secrets.DATABRICKS_ACCOUNT_ID }}
+          TF_VAR_metastore_id:            ${{ secrets.DATABRICKS_METASTORE_ID }}
+          TF_VAR_deployment_sp_client_id: ${{ secrets.AZURE_CLIENT_ID }}
         run: terraform plan -input=false -no-color

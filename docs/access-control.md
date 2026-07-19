@@ -33,34 +33,26 @@ Model-serving endpoint permissions (`CAN_QUERY`, `CAN_MANAGE`) are a fifth layer
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Databricks Account (account/main.tf)                                       │
 │                                                                             │
-│  Metastore ◄─── assigned to each workspace via unity-catalog module        │
+│  Metastore ◄─── assigned to each workspace via the unity-catalog module    │
 │                                                                             │
 │  Groups:                                                                    │
-│    ad-dbx          (platform / admin)                                       │
-│    ad-dbx-team-a   (team-a users)                                          │
+│    ad-dbx          (owner / admin)                                          │
 │    PowerBI_users   (BI readers)                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
-        │                               │
-        ▼                               ▼
-┌───────────────────┐         ┌───────────────────┐
-│  team-a           │         │  team-b            │
-│  workspace        │         │  workspace         │
-│                   │         │                    │
-│  Model Serving    │         │  Model Serving     │
-│  Endpoints        │         │  Endpoints         │
-│                   │         │                    │
-│  UC: main         │         │  UC: main          │
-│  catalog          │         │  catalog           │
-└────────┬──────────┘         └────────┬───────────┘
-         │ inference rows              │ inference rows
-         │ prefix: team_a_*            │ prefix: team_b_*
-         └──────────────┬─────────────┘
-                        ▼
-          ┌─────────────────────┐
-          │  platform workspace │
-          │  UC: llmlogs        │
-          │  catalog (shared)   │
-          └─────────────────────┘
+                                │
+                                ▼
+                    ┌───────────────────────┐
+                    │  dbx-dev workspace    │
+                    │                       │
+                    │  Model Serving        │
+                    │  Endpoints            │
+                    │                       │
+                    │  UC: main catalog     │
+                    │   (owned directly,    │
+                    │    incl.              │
+                    │    model_serving_logs │
+                    │    schema)            │
+                    └───────────────────────┘
 ```
 
 ---
@@ -103,18 +95,18 @@ Groups are created once in `environments/account/main.tf` and then referenced by
 ```hcl
 # environments/account/terraform.tfvars
 groups = ["ad-dbx", "PowerBI_users"]
-teams  = ["team-a"]            # produces group "ad-dbx-team-a"
+teams  = []            # no per-team groups — single workspace owns everything
 ```
 
 | Group | Intended members | Role in the system |
 |---|---|---|
-| `ad-dbx` | Platform / infra engineers | Metastore owner, endpoint `CAN_MANAGE`, UC `ALL_PRIVILEGES` |
-| `ad-dbx-team-a` | Team-A data scientists | team-a and team-b workspace access + endpoint `CAN_QUERY` |
+| `ad-dbx` | Platform / infra engineers | Metastore owner, endpoint `CAN_MANAGE`, UC `ALL_PRIVILEGES` on `dbx-dev` |
 | `PowerBI_users` | BI / reporting consumers | Read-only catalogs, no endpoint access |
 
-Adding a new team requires two changes:
-1. Add the team name to `teams` in `environments/account/terraform.tfvars` → creates the `ad-dbx-<team>` group.
-2. Add the group name to `consumer_groups` in the target hub's `terraform.tfvars` → grants workspace membership and `CAN_QUERY`.
+Granting access to a new consumer group is a single change:
+add the group name to `consumer_groups` (or `reader_groups`) in
+`environments/dbx-dev/terraform.tfvars` → grants workspace membership and,
+for `consumer_groups`, endpoint `CAN_QUERY`.
 
 ---
 
@@ -142,20 +134,16 @@ The three input lists map to the three variable families in `workspace-stack`:
 | `consumer_groups` | `workspace_consumer_groups` | USER | none |
 | `reader_groups` | `workspace_reader_groups` | USER | read-only catalogs |
 
-### Dev environment assignments
+### dbx-dev environment assignment
 
 ```
-team-a workspace
-  workspace_groups = ["ad-dbx-team-a"]
-  consumer_groups  = ["ad-dbx"]
-  → ad-dbx-team-a gets USER on team-a workspace
-  → ad-dbx gets USER on team-a workspace
+dbx-dev workspace
+  workspace_groups = ["ad-dbx"]
+  consumer_groups  = []
+  → ad-dbx gets USER on dbx-dev workspace + ALL_PRIVILEGES on main catalog
 
-team-b workspace
-  workspace_groups = ["ad-dbx-team-b"]
-  consumer_groups  = ["ad-dbx", "ad-dbx-team-a"]
-  → ad-dbx-team-b gets USER on team-b workspace
-  → ad-dbx + ad-dbx-team-a get USER on team-b workspace (consumers)
+Add BI/reporting groups to reader_groups, or additional consumer groups
+to consumer_groups, in environments/dbx-dev/terraform.tfvars as needed.
 ```
 
 ---
@@ -166,24 +154,17 @@ Granted in `modules/unity-catalog/main.tf` using `databricks_grant` resources.
 
 ```
 Metastore (shared, one per region)
-  ├── ad-dbx-team-a (via workspace_groups on team-a)
-  │     CREATE_CATALOG, CREATE_EXTERNAL_LOCATION, CREATE_STORAGE_CREDENTIAL
-  │
-  └── ad-dbx-team-b (via workspace_groups on team-b)
+  └── ad-dbx (via workspace_groups on dbx-dev)
         CREATE_CATALOG, CREATE_EXTERNAL_LOCATION, CREATE_STORAGE_CREDENTIAL
 
-Catalog: llmlogs  (platform inference logs — owned by platform workspace)
-  └── ad-dbx  → ALL_PRIVILEGES  (inference_admin_groups on platform)
+Catalog: main  (owned directly by dbx-dev, create_main_catalog = true)
+  └── ad-dbx → ALL_PRIVILEGES (workspace_groups)
 
-  inference_writer_groups on platform:
-    ad-dbx-team-a, ad-dbx-team-b  → USE_CATALOG + USE_SCHEMA + MODIFY + CREATE_TABLE
-    (write only — no SELECT; read is reserved to admins)
-
-Catalog: main  (per-workspace, created per team)
-  └── ad-dbx-team-a/team-b → ALL_PRIVILEGES (workspace_groups)
-
-Schema: model_serving_logs  (inside llmlogs catalog)
+Schema: model_serving_logs  (inside the main catalog)
   └── created by unity-catalog module, owned by uc_owner_group (ad-dbx)
+      inference_table_catalog = "main" — no separate inference catalog,
+      no inference_writer_groups / inference_admin_groups needed since
+      there's no cross-workspace writer.
 ```
 
 ### Read-only grant (reader groups)
@@ -191,7 +172,7 @@ Schema: model_serving_logs  (inside llmlogs catalog)
 ```
 PowerBI_users (if added to reader_groups)
   USE_CATALOG, USE_SCHEMA, SELECT, EXECUTE, READ_VOLUME
-  on both the main catalog and the inference catalog
+  on the main catalog
 ```
 
 ---
@@ -210,8 +191,8 @@ model_serving_admin_groups ────────► admin_groups       → CA
 These variables flow from `terraform.tfvars` → `workspace-stack` → `model-serving`:
 
 ```
-environments/dev/team-a/terraform.tfvars
-  consumer_groups            = ["ad-dbx", "ad-dbx-team-b"]
+environments/dbx-dev/terraform.tfvars
+  consumer_groups            = []
   model_serving_admin_groups = ["ad-dbx"]
        │
        ▼
@@ -226,33 +207,38 @@ modules/model-serving/main.tf
   (databricks_permissions resources render one per endpoint)
 ```
 
-### Endpoint permission matrix (team-a dev)
+### Endpoint permission matrix (dbx-dev)
 
-| Endpoint | `ad-dbx` | `ad-dbx-team-a` | `PowerBI_users` |
-|---|---|---|---|
-| `azure-gpt-4o` | CAN_MANAGE | CAN_QUERY | — |
-| `azure-gpt-5-mini` | CAN_MANAGE | CAN_QUERY | — |
-| `azure-gpt-5-4` | CAN_MANAGE | CAN_QUERY | — |
-| `azure-text-embedding-ada-002` | CAN_MANAGE | CAN_QUERY | — |
-| `dbrx-claude-sonnet-4-6` | CAN_MANAGE | CAN_QUERY | — |
-| `azure-gpt-chat-fallback` (fallback router) | CAN_MANAGE | CAN_QUERY | — |
+| Endpoint | `ad-dbx` | `PowerBI_users` |
+|---|---|---|
+| `azure-gpt-4o` | CAN_MANAGE | — |
+| `azure-gpt-5-mini` | CAN_MANAGE | — |
+| `azure-gpt-5-4` | CAN_MANAGE | — |
+| `azure-text-embedding-ada-002` | CAN_MANAGE | — |
+| `dbrx-claude-sonnet-4-6` | CAN_MANAGE | — |
+| `azure-gpt-chat-fallback` (fallback router) | CAN_MANAGE | — |
+
+Any group added to `consumer_groups` in
+`environments/dbx-dev/terraform.tfvars` is automatically granted
+`CAN_QUERY` on every endpoint above.
 
 ---
 
 ## End-to-End Access Flow
 
-The diagram below walks a team-a user through the full request path from login to inference.
+The diagram below walks a user through the full request path from login to
+inference against the single `dbx-dev` workspace.
 
 ```
-Team-A user
+User
     │
     │  1. Authenticates via Entra ID
     ▼
-account group: ad-dbx-team-a
+account group: ad-dbx
     │
-    │  2. databricks_mws_permission_assignment → USER on team-a workspace
+    │  2. databricks_mws_permission_assignment → USER on dbx-dev workspace
     ▼
-team-a workspace (login granted)
+dbx-dev workspace (login granted)
     │
     │  3. databricks_permissions → CAN_QUERY on model-serving endpoints
     ▼
@@ -261,9 +247,9 @@ Model-serving endpoint (e.g. azure-gpt-4o)
     │  4. AI gateway enforces:
     │     • rate limits (60 calls/min per endpoint, 20/min per user)
     │     • guardrails (PII masking, safety filters, input/output)
-    │     • writes payload to inference table (llmlogs.model_serving_logs.team_a_azure_gpt4o_payload)
+    │     • writes payload to inference table (main.model_serving_logs.azure_gpt4o_payload)
     ▼
-SP: <workspace>-model-serving
+SP: dbx-dev-model-serving
     │
     │  5. azurerm_role_assignment → Cognitive Services OpenAI User
     ▼
@@ -271,39 +257,46 @@ Azure AI Foundry (gpt-4o deployment)
     │
     │  6. Response returned through gateway → user
     ▼
-Team-A user receives answer
+User receives answer
 ```
 
 ---
 
-## How to Grant Access to a New Team
+## How to Grant Access to a New Consumer Group
 
-1. **Create the account-level group** — add the team name to `teams` in `environments/account/terraform.tfvars` and apply.
+There is no more team-onboarding flow — `dbx-dev` is the only workspace, so
+granting access is a single change on its `terraform.tfvars`.
 
-2. **Grant workspace + endpoint access** — add the new group to `consumer_groups` in the hub's `terraform.tfvars` and apply.
+1. **Create the account-level group** (if it doesn't already exist) — add it
+   to `groups` in `environments/account/terraform.tfvars` and apply.
+
+2. **Grant workspace + endpoint access** — add the new group to
+   `consumer_groups` (query-only) or `reader_groups` (read-only UC access)
+   in `environments/dbx-dev/terraform.tfvars` and apply.
 
 ```hcl
-# environments/dev/team-a/terraform.tfvars
+# environments/dbx-dev/terraform.tfvars
 consumer_groups = [
-  "ad-dbx",
-  "ad-dbx-team-b",   # ← grant team-b CAN_QUERY on team-a endpoints
+  "some-new-group",   # ← grants CAN_QUERY on every dbx-dev endpoint
 ]
 ```
 
-That single change propagates through three resources:
+That single change propagates through two resources:
 - `databricks_mws_permission_assignment` (workspace USER)
 - `databricks_permissions` on every endpoint (CAN_QUERY)
 
-3. **Optional — UC write access**: if the team needs to write data (not just query models), add them to `workspace_groups` in their own workspace's `terraform.tfvars` and set `create_main_catalog = true`.
+3. **Optional — UC write access**: if the group needs to write data (not
+   just query models), add it to `workspace_groups` instead — this grants
+   `ALL_PRIVILEGES` on the `main` catalog in addition to workspace access.
 
 ---
 
 ## How to Restrict Access (Rate Limits & Guardrails)
 
-Rate limits and guardrails are set per team workspace in `terraform.tfvars` and apply to **all endpoints** in that workspace.
+Rate limits and guardrails are set on the `dbx-dev` workspace in `terraform.tfvars` and apply to **all endpoints** in that workspace.
 
 ```hcl
-# environments/dev/team-a/terraform.tfvars
+# environments/dbx-dev/terraform.tfvars
 model_serving_rate_limits = [
   { calls = 60, key = "endpoint", renewal_period = "minute" },   # total per endpoint
   { calls = 20, key = "user",     renewal_period = "minute" },   # per-user throttle
@@ -319,31 +312,26 @@ Per-group rate limits can be added by including a `principal` field on a limit e
 
 ---
 
-## Per-Team Endpoint Ownership
+## Endpoint Ownership
 
 ```
                 Databricks Account
                        │
-          ┌────────────┼────────────┐
-          ▼            ▼            ▼
-    platform ws    team-a ws    team-b ws
-    (model_serving (model_serving (model_serving
-     =false)        =true)         =true)
-          │            │            │
-          │ owns        │ owns        │ owns
-          │ llmlogs     │ endpoints   │ endpoints
-          │ catalog     │ + writes    │ + writes
-          │             │ inference   │ inference
-          │             │ rows        │ rows
-          └─────────────┴────────────┘
-                   unified metastore
-               (shared, account level)
+                       ▼
+                dbx-dev workspace
+                (enable_model_serving = true,
+                 create_main_catalog  = true)
+                       │
+                       │ owns endpoints + main catalog
+                       │ (incl. model_serving_logs schema)
+                       ▼
+                 unified metastore
+             (shared, account level)
 ```
 
-- **platform**: owns the centralised `llmlogs` inference catalog. No endpoints. Admin-only read.
-- **team-a / team-b**: each team deploys its own governed, rate-limited, guarded endpoints. Teams share the same inference catalog for consolidated audit and cost attribution.
-
-Adding a new team deploys a new `environments/{env}/team-{x}/` stack without touching any other workspace.
+`dbx-dev` owns everything directly — the model-serving endpoints and the
+`main` catalog they write inference rows into. There is no separate
+platform/team split and no cross-workspace writer grants.
 
 ---
 
@@ -360,7 +348,7 @@ SELECT
   count(*)                           AS requests,
   sum(usage.completion_tokens)       AS tokens_out,
   sum(usage.prompt_tokens)           AS tokens_in
-FROM llmlogs.model_serving_logs.azure_gpt4o_payload
+FROM main.model_serving_logs.azure_gpt4o_payload
 GROUP BY 1, 2
 ORDER BY 2 DESC, 3 DESC;
 ```
