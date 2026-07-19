@@ -10,11 +10,13 @@ variable "location" {
 }
 
 variable "resource_group_name" {
-  type = string
+  type    = string
+  default = "rg-databricks-dbx-uat"
 }
 
 variable "workspace_name" {
-  type = string
+  type    = string
+  default = "dbx-uat"
 }
 
 variable "sku" {
@@ -193,4 +195,21 @@ variable "model_serving_admin_groups" {
 variable "deployment_sp_client_id" {
   description = "Azure client ID of the deployment service principal (sp-terraform-databricks). Granted ADMIN on this workspace at creation time."
   type        = string
+}
+
+variable "databricks_auth_type" {
+  description = <<-EOT
+    Databricks provider auth strategy. Defaults to `azure-client-secret`, which
+    reads ARM_CLIENT_ID / ARM_CLIENT_SECRET / ARM_TENANT_ID as exported by
+    scripts/dev-auth.sh. CI sets this to `github-oidc-azure` so the workflow
+    authenticates via the GitHub Actions OIDC token (ACTIONS_ID_TOKEN_REQUEST_*)
+    and needs no client secret.
+  EOT
+  type        = string
+  default     = "azure-client-secret"
+
+  validation {
+    condition     = contains(["azure-client-secret", "github-oidc-azure", "azure-cli"], var.databricks_auth_type)
+    error_message = "databricks_auth_type must be one of: azure-client-secret, github-oidc-azure, azure-cli."
+  }
 }

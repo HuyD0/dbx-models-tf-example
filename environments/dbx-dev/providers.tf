@@ -38,7 +38,7 @@ data "azurerm_client_config" "current" {}
 # Workspace-scoped Databricks provider — host derived from the workspace module
 # output so a single `terraform apply` provisions everything end-to-end.
 provider "databricks" {
-  auth_type = "azure-client-secret"
+  auth_type = var.databricks_auth_type
   # Construct the ARM resource ID from variables rather than module outputs to
   # avoid a cyclic dependency (provider → module output → workspace resource →
   # provider). The Databricks provider derives the workspace URL from this ID.
@@ -48,7 +48,7 @@ provider "databricks" {
 # Account-scoped Databricks provider — used for metastore + assignment.
 provider "databricks" {
   alias           = "accounts"
-  auth_type       = "azure-client-secret"
+  auth_type       = var.databricks_auth_type
   host            = "https://accounts.azuredatabricks.net"
   account_id      = var.databricks_account_id
   azure_tenant_id = data.azurerm_client_config.current.tenant_id
