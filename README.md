@@ -60,7 +60,8 @@ The deployment supports three goals:
 bootstrap/                 # One-time remote state backend provisioning
 environments/
   account/                 # Account-level: metastore, AAD groups
-  dbx-dev/                 # Single workspace — owns main catalog + model serving
+  dbx-dev/                 # Dev workspace — owns `main` catalog + model serving
+  dbx-uat/                 # UAT workspace — owns `uat` catalog, no model serving
 modules/
   networking/              # VNet, subnets, NSGs (VNet injection)
   databricks-workspace/    # Workspace + Access Connector
@@ -74,12 +75,25 @@ docs/                      # Architecture, AI gateway, NIST mapping, operations
 
 ## Workspace strategy
 
-A single workspace, `dbx-dev` (`environments/dbx-dev/`), owns everything
-directly: it creates and owns the `main` Unity Catalog catalog
-(`create_main_catalog = true`) and deploys the model-serving endpoints
-(`enable_model_serving = true`). Inference tables attach directly to the
-`main` catalog's `model_serving_logs` schema — there's no separate
-inference-only catalog and no cross-workspace writer grants to manage.
+Two workspaces share one Unity Catalog metastore, each owning its own
+catalog. Catalog names are metastore-global, so exactly one workspace may
+own `main`.
+
+| Env | Catalog | `create_main_catalog` | Model serving |
+|---|---|---|---|
+| `dbx-dev` | `main` | `true` | `true` — owns all endpoints |
+| `dbx-uat` | `uat` | `false` | `false` |
+
+`dbx-dev` owns the `main` catalog and deploys the model-serving endpoints.
+Inference tables attach directly to the `main` catalog's
+`model_serving_logs` schema — no cross-workspace writer grants to manage.
+
+`dbx-uat` is a workspace + networking + Unity Catalog tier only. It assigns
+to the same metastore and owns a catalog named `uat` (via
+`inference_table_catalog = "uat"`, which auto-creates the catalog since it
+isn't `main`) with its own `model_serving_logs` schema. Serving can be
+enabled later by flipping `enable_model_serving` and supplying
+`ai_foundry_name` / `ai_foundry_resource_group`.
 
 Endpoint configuration is **centrally governed**: `dbx-dev` reads
 `modules/model-serving/model_defaults.yaml` as the single source of truth
@@ -98,7 +112,7 @@ The `workspace-stack` module exposes a single boolean:
 
 ```hcl
 enable_model_serving = true   # dbx-dev — deploys databricks_model_serving endpoints
-enable_model_serving = false  # a consumer-only workspace with no endpoints, if ever added
+enable_model_serving = false  # dbx-uat — workspace + UC only, no endpoints
 ```
 
 ### What the dbx-dev workspace deploys
@@ -133,10 +147,10 @@ Any Databricks account-level group listed in `consumer_groups` on the
 
 Add a new consumer group by appending to the list and re-applying.
 
-### Deploying the dbx-dev workspace
+### Deploying a workspace
 
 ```bash
-cd environments/dbx-dev
+cd environments/dbx-dev        # or environments/dbx-uat
 cp ../../terraform.tfvars.example terraform.tfvars
 # fill in subscription_id, databricks_account_id, metastore_id, ai_foundry_name
 terraform init
@@ -144,8 +158,9 @@ terraform plan -out=tfplan
 terraform apply tfplan
 ```
 
-Account must apply before `dbx-dev` — the workspace references the
-metastore that `environments/account/` creates.
+Account must apply before either workspace — both reference the metastore
+that `environments/account/` creates. The two workspace envs are
+independent of each other and can apply in any order.
 
 ## What this deploys
 
@@ -207,7 +222,8 @@ terraform init
 terraform apply
 METASTORE_ID=$(terraform output -raw metastore_id)
 
-# 3. Deploy the dbx-dev workspace (account must apply first)
+# 3. Deploy the workspaces (account must apply first; order between them
+#    does not matter)
 cd ../environments/dbx-dev
 cp ../../terraform.tfvars.example terraform.tfvars
 # fill in subscription_id, databricks_account_id, metastore_id, ai_foundry_name
@@ -268,7 +284,7 @@ repo handles them through three layers, all driven by
 To run the reconciler manually (e.g. after an out-of-band UI change):
 
 ```bash
-scripts/apply-ai-gateway.sh                 # all workload workspaces (currently just dbx-dev)
+scripts/apply-ai-gateway.sh                 # all serving-enabled workspaces (currently just dbx-dev)
 scripts/apply-ai-gateway.sh dbx-dev         # a single env
 scripts/apply-ai-gateway.sh --dry-run dbx-dev # print payloads only
 ```

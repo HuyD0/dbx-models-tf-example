@@ -1,13 +1,20 @@
 # Architecture
 
-This project provisions a single Azure Databricks workspace, `dbx-dev`,
-configured as a centralised **AI gateway** in front of both Databricks-hosted
-foundation models (e.g. Claude) and Azure AI Foundry-hosted models (e.g.
-GPT-4o, GPT-5-mini). All inference traffic flows through Databricks Model
-Serving so that usage, prompts, and completions can be tracked in Unity
-Catalog inference tables. The workspace owns the `main` catalog directly —
-there is no separate platform/team split and no cross-workspace catalog
-sharing.
+This project provisions Azure Databricks workspaces sharing a single Unity
+Catalog metastore. The primary workspace, `dbx-dev`, is configured as a
+centralised **AI gateway** in front of both Databricks-hosted foundation
+models (e.g. Claude) and Azure AI Foundry-hosted models (e.g. GPT-4o,
+GPT-5-mini). All inference traffic flows through Databricks Model Serving so
+that usage, prompts, and completions can be tracked in Unity Catalog
+inference tables. `dbx-dev` owns the `main` catalog directly — there is no
+platform/team split and no cross-workspace catalog sharing.
+
+A second workspace, `dbx-uat`, provides a UAT tier: same metastore, its own
+catalog named `uat`, and no model-serving endpoints
+(`enable_model_serving = false`). Because catalog names are metastore-global,
+only one workspace can own `main` — each additional workspace owns a
+distinctly-named catalog of its own. The diagram below describes `dbx-dev`;
+`dbx-uat` is the same stack minus the model-serving layer.
 
 ## High-level diagram
 
@@ -94,12 +101,15 @@ secret is passed to the model serving config via
 - `bootstrap/` provisions the remote state Storage Account (one-time).
 - `environments/account/` holds account-level resources (metastore, groups).
   Run before any workspace environment.
-- `environments/dbx-dev/` owns the workspace, its Unity Catalog assignment,
-  and its model-serving endpoints. It consumes the metastore created in
-  `account/` via `var.metastore_id`.
+- `environments/dbx-dev/` owns the dev workspace, its Unity Catalog
+  assignment, and its model-serving endpoints. It consumes the metastore
+  created in `account/` via `var.metastore_id`.
+- `environments/dbx-uat/` owns the UAT workspace and its `uat` catalog. It
+  consumes the same metastore and has no model-serving layer. It is
+  independent of `dbx-dev` — neither env reads the other's state.
 
 **Region note**: `environments/account`'s metastore is in `canadacentral`,
-but `environments/dbx-dev` deploys the workspace itself in `eastus2` — a
+but both workspace envs deploy in `eastus2` — a
 deliberate cross-region metastore assignment. The Azure AI Foundry accounts
 backing this workspace's model-serving endpoints are in East US 2, and model
 calls (frequent, latency-sensitive HTTP round-trips to Foundry) are prioritized
@@ -108,13 +118,18 @@ same-region placement. Databricks supports attaching a workspace to a
 metastore in a different region; only the metastore itself is one-per-region.
 
 Each environment uses a separate state file key in the same backend container
-— see `environments/dbx-dev/providers.tf` and `environments/account/providers.tf`.
+— `databricks/dbx-dev/`, `databricks/dbx-uat/`, and the account key. See each
+env's `providers.tf`.
 
 ## Deploy order
 
 ```
 bootstrap  →  account  →  dbx-dev
+                      └→  dbx-uat
 ```
+
+The two workspace envs both depend on `account` but not on each other, so
+they can apply in either order (or concurrently).
 
 This order is enforced by `scripts/redeploy.sh` and asserted by
 `scripts/pre-push-check.sh`.

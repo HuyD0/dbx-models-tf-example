@@ -33,7 +33,7 @@ Model-serving endpoint permissions (`CAN_QUERY`, `CAN_MANAGE`) are a fifth layer
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Databricks Account (account/main.tf)                                       │
 │                                                                             │
-│  Metastore ◄─── assigned to the dbx-dev workspace via unity-catalog module │
+│  Metastore ◄─── assigned to each workspace via the unity-catalog module    │
 │                                                                             │
 │  Groups:                                                                    │
 │    ad-dbx          (owner / admin)                                          │

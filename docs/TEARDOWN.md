@@ -1,7 +1,7 @@
 # Full teardown runbook
 
-Destroys **everything** this repo manages — the single `dbx-dev` workspace,
-the Databricks account-level objects, the Terraform state backend, the
+Destroys **everything** this repo manages — the `dbx-dev` and `dbx-uat`
+workspaces, the Databricks account-level objects, the Terraform state backend, the
 deployment service principal — and then sweeps Azure for anything Terraform
 leaves behind.
 
@@ -29,12 +29,12 @@ do not run it end-to-end unattended.
 
 ## Order (reverse of deploy)
 
-Deploy is `bootstrap → account → dbx-dev`, so teardown is:
+Deploy is `bootstrap → account → {dbx-dev, dbx-uat}`, so teardown is:
 
 | # | Phase | What dies | Auth as |
 |---|-------|-----------|---------|
 | 0 | `discover` | nothing — inventory only | SP |
-| 1 | `workspace` | `dbx-dev` workspace, VNet, UC storage, `main` catalog (incl. `model_serving_logs` schema), model serving endpoints | SP |
+| 1 | `workspace` | both workspaces, their VNets and UC storage, the `main` and `uat` catalogs (each incl. a `model_serving_logs` schema), model serving endpoints (`dbx-dev` only) | SP |
 | 2 | `account` | UC **metastore**, account groups, account SCIM SP | SP |
 | 3 | `bootstrap` | **state storage** `tfstatee18f8286`, Key Vault, SP, sub-scope role assignments | **you** |
 | 4 | `sweep` | purge soft-deleted KV, delete AAD app, verify RGs gone | **you** |
@@ -125,7 +125,7 @@ a few things the sweep handles:
 - **Workspace-managed RGs** `databricks-rg-*` (random suffix) — should auto-delete
   with each workspace; `sweep` lists any orphans by pattern.
 - **Resource groups** verified gone: `rg-databricks-dbx-dev`,
-  `rg-terraform-state`, `rg-terraform-sp`.
+  `rg-databricks-dbx-uat`, `rg-terraform-state`, `rg-terraform-sp`.
 - **Dangling role assignments** referencing the now-deleted SP.
 
 Resources deleted *with* their RG (no extra step): UC storage account

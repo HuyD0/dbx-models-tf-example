@@ -50,11 +50,15 @@ STATE_STORAGE_ACCOUNT="tfstatee18f8286"
 SP_DISPLAY_NAME="sp-terraform-databricks"
 METASTORE_ID="e34cdfb0-ad14-4612-9eac-7dd05ff29e33"
 
-WORKSPACE_ENV="environments/dbx-dev"
+WORKSPACE_ENVS=(
+  environments/dbx-dev
+  environments/dbx-uat
+)
 ACCOUNT_ENV="environments/account"
 
 RESOURCE_GROUPS=(
   rg-databricks-dbx-dev
+  rg-databricks-dbx-uat
   rg-terraform-state
   rg-terraform-sp
 )
@@ -82,7 +86,7 @@ destroy_env() {
 # --- phases -------------------------------------------------------------------
 discover() {
   note "Discovery — what Terraform thinks exists (per env state)"
-  for env in "$WORKSPACE_ENV" "$ACCOUNT_ENV"; do
+  for env in "${WORKSPACE_ENVS[@]}" "$ACCOUNT_ENV"; do
     [ -d "$env" ] || continue
     echo "### $env"
     terraform -chdir="$env" init -reconfigure -input=false >/dev/null 2>&1 || warn "init failed for $env"
@@ -109,7 +113,7 @@ workspace() {
   warn "by serving endpoints. terraform destroy WILL FAIL on a non-empty"
   warn "catalog/schema. If it does, see docs/TEARDOWN.md 'force_destroy'."
   confirm "Destroy the dbx-dev workspace?"
-  destroy_env "$WORKSPACE_ENV"
+  for env in "${WORKSPACE_ENVS[@]}"; do destroy_env "$env"; done
   note "Workspace destroyed. Next: ./scripts/teardown.sh account"
 }
 

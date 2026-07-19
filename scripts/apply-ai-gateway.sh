@@ -74,6 +74,7 @@ if ! $SINGLE && [[ ${#TARGETS[@]} -eq 0 ]]; then
     rel="${d#$REPO_ROOT/environments/}"
     case "$rel" in
       account) continue ;;  # skip non-workload envs
+      dbx-uat) continue ;; # enable_model_serving = false -- no endpoints to reconcile
     esac
     TARGETS+=("$rel")
   done < <(find "$REPO_ROOT/environments" -mindepth 1 -maxdepth 1 -type d | sort)

@@ -9,6 +9,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENVS=(
   account
   dbx-dev
+  dbx-uat
 )
 
 # ── Auth precheck ─────────────────────────────────────────────────────────────
