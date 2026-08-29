@@ -31,6 +31,13 @@ locals {
 
 # --- ADLS Gen2 storage account for Unity Catalog ---
 
+# Accepted for this demo: no storage firewall on the UC account. Deny-by-
+# default requires a resource-instance rule for the Access Connector
+# (Microsoft.Databricks/accessConnectors) AND an IP allowlist/private
+# endpoint for the deployer that creates the container — without both,
+# terraform apply and Unity Catalog access break. Tracked as a production
+# hardening gap in docs/nist-alignment.md.
+#trivy:ignore:AVD-AZU-0012
 resource "azurerm_storage_account" "unity_catalog" {
   name                            = local.uc_storage_account_name
   resource_group_name             = var.resource_group_name

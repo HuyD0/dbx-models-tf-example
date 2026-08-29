@@ -75,6 +75,11 @@ resource "azurerm_resource_group" "state" {
   location = var.location
 }
 
+# Accepted for this demo: no storage firewall on the tfstate account. CI
+# runners and operator laptops reach blob storage from changing IPs, so
+# default_action = Deny would break every terraform init/plan. Production
+# hardening: IP allowlist or private endpoint + self-hosted runners.
+#trivy:ignore:AVD-AZU-0012
 resource "azurerm_storage_account" "state" {
   name                            = local.storage_account_name
   resource_group_name             = azurerm_resource_group.state.name
@@ -138,6 +143,11 @@ resource "azurerm_resource_group" "sp" {
   tags     = var.tags
 }
 
+# Accepted for this demo: no Key Vault network ACLs. The operator writes
+# the SP secret from their own IP during bootstrap; default_action = Deny
+# would block that. Production hardening: network_acls with an IP
+# allowlist (bypass AzureServices) or a private endpoint.
+#trivy:ignore:AVD-AZU-0013
 resource "azurerm_key_vault" "sp" {
   name                       = local.kv_name
   resource_group_name        = azurerm_resource_group.sp.name
