@@ -83,10 +83,17 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
 
+  # Requires working Azure OIDC: the sp-terraform-databricks app
+  # registration must carry federated identity credentials for this repo
+  # (subjects repo:<owner>/<repo>:pull_request and ...:ref:refs/heads/main).
+  # Until that exists the job can only fail at login (AADSTS70025), so it
+  # is gated behind an explicit opt-in: set the repository variable
+  # ENABLE_CI_PLAN=true (Settings → Secrets and variables → Actions →
+  # Variables) once the credentials are in place. Unset = skipped.
   plan:
     name: plan-${{ matrix.env }}
     needs: validate
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && vars.ENABLE_CI_PLAN == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
