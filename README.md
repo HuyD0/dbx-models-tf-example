@@ -51,6 +51,7 @@ The deployment supports three goals:
 | Doc | What's in it |
 |---|---|
 | [`docs/model-serving.md`](docs/model-serving.md) | **Primary doc** — endpoint catalog, inline `ai_gateway` config (usage tracking, inference tables, rate limits), logging & usage SQL, fallback routing in depth, identity & secret rotation |
+| [`docs/budgets.md`](docs/budgets.md) | Cost governance — account-level budgets (LLM spend alerts + optional usage blocking) and budget/serverless-usage policies for chargeback |
 | [`docs/architecture.md`](docs/architecture.md) | Component diagram, request flow, why an SP is used for Azure OpenAI |
 | [`docs/nist-alignment.md`](docs/nist-alignment.md) | NIST AI RMF + SP 800-53 control mapping with gaps |
 
@@ -59,7 +60,9 @@ The deployment supports three goals:
 ```
 bootstrap/                 # One-time remote state backend provisioning
 environments/
-  account/                 # Account-level: metastore, AAD groups
+  account/                 # Account-level: metastore, AAD groups, budgets + budget policies
+    budget_defaults.yaml       # Budgets + budget (usage) policies — cost governance source of truth
+    budget_defaults.schema.json # JSON Schema — validated by pre-commit and CI
   dbx-dev/                 # Dev workspace — owns `main` catalog + model serving
   dbx-uat/                 # UAT workspace — owns `uat` catalog, no model serving
 modules/
@@ -67,10 +70,10 @@ modules/
   databricks-workspace/    # Workspace + Access Connector
   unity-catalog/           # Storage, metastore assignment, catalog, schema, grants
   model-serving/           # AI gateway: external + foundation endpoints, fallback router
-    model_defaults.yaml        # Approved model allowlists + default endpoint catalog
+    model_defaults.yaml        # Approved model allowlists + endpoint catalog + gateway_defaults policy
     model_defaults.schema.json # JSON Schema — validated by pre-commit and CI
   workspace-stack/         # Composes networking + workspace + UC + model-serving
-docs/                      # Architecture, AI gateway, NIST mapping, operations
+docs/                      # Architecture, AI gateway, budgets, NIST mapping, operations
 ```
 
 ## Workspace strategy
@@ -128,14 +131,37 @@ enable_model_serving = false  # dbx-uat — workspace + UC only, no endpoints
 
 ### Rate limits (defaults)
 
-Applied to every endpoint in the workspace:
+Defined once in `gateway_defaults` in
+`modules/model-serving/model_defaults.yaml` and applied to every endpoint
+in the workspace — Terraform-managed external endpoints and (via the
+reconciler script) the pre-provisioned `databricks-*` foundation
+endpoints share the same policy:
 
 | Scope | Limit |
 |---|---|
 | `endpoint` | 60 calls / minute |
 | `user` | 20 calls / minute |
 
-Override via `model_serving_rate_limits` in `environments/dbx-dev/terraform.tfvars`.
+The YAML also supports endpoint token limits (`endpoint_tpm`), per-group
+limits (`user_group_limits`, max 5), and default guardrails (safety +
+PII behavior). Override per workspace via `model_serving_rate_limits` /
+`model_serving_guardrails` in `environments/dbx-dev/terraform.tfvars`.
+
+### Cost governance (budgets + budget policies)
+
+`environments/account/budget_defaults.yaml` declares:
+
+- **Budgets** — monthly USD spend monitors with email alerts. The
+  `UNITY_AI_GATEWAY`-scoped budget tracks LLM spend (external models AND
+  the pay-per-token `databricks-*` endpoints) near-real-time and can
+  optionally **block further AI Gateway usage** past a threshold.
+- **Budget policies** (serverless usage policies) — custom tags stamped
+  onto `system.billing.usage` for chargeback, attachable to serving
+  endpoints via `model_serving_budget_policy_id`, with group grants
+  managed in Terraform.
+
+See [`docs/budgets.md`](docs/budgets.md) for the YAML shape, the
+policy-ID handoff between environments, and import runbooks.
 
 ### Access control — `consumer_groups`
 
@@ -318,8 +344,11 @@ for the step-by-step workflow.
 | `inference_table_catalog` | UC catalog for inference tables | `main` |
 | `inference_table_schema` | UC schema for inference tables | `model_serving_logs` |
 | `model_serving_fallback_enabled` | Enable AI gateway traffic fallback | `false` |
-| `model_serving_rate_limits` | Rate limit rules applied to every endpoint | `[]` |
-| `model_serving_external_endpoints` | Full override of the Azure OpenAI endpoint catalog (`null` = load from `model_defaults.yaml`) | `null` |
+| `model_serving_rate_limits` | Rate limit rules applied to every endpoint (`[]` = use `gateway_defaults` from `model_defaults.yaml`) | `[]` |
+| `model_serving_guardrails` | AI Gateway guardrails override (`null` = use `gateway_defaults`) | `null` |
+| `model_serving_budget_policy_id` | Budget (serverless usage) policy attached to every endpoint — from `environments/account` outputs | `null` |
+| `model_serving_endpoint_permissions_enabled` | Manage endpoint ACLs (set `false` where the inference-endpoint ACL feature is unavailable) | `true` |
+| `model_serving_external_endpoints` | Full override of the external endpoint catalog (`null` = load from `model_defaults.yaml`) | `null` |
 | `model_serving_additional_external_endpoints` | Extra external endpoints merged on top of the active set | `{}` |
 | `ai_gateway_reconcile_on_apply` | Run `scripts/apply-ai-gateway.sh` on every `terraform apply` to enforce YAML-driven rate limits + inference tables on pre-provisioned `databricks-*` endpoints | `true` |
 | `databricks_account_id` | Databricks account UUID (sensitive) | — |

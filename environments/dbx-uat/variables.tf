@@ -127,25 +127,58 @@ variable "model_serving_rate_limits" {
 }
 
 variable "model_serving_external_endpoints" {
-  description = "External (Azure OpenAI) model serving endpoints. Override to add or remove deployments without editing the module."
+  description = "External model serving endpoints. Override to add or remove deployments without editing the module. provider defaults to openai (Azure AI Foundry); anthropic entries require api_key_secret."
   type = map(object({
     model           = string
-    deployment_name = string
+    deployment_name = optional(string)
     task            = string
     table_prefix    = string
+    provider        = optional(string, "openai")
+    api_key_secret  = optional(string)
   }))
   default = null
 }
 
 variable "model_serving_additional_external_endpoints" {
-  description = "Extra external (Azure OpenAI) endpoints merged on top of the module defaults. Use to add a model without replacing the full list."
+  description = "Extra external endpoints merged on top of the module defaults. Use to add a model without replacing the full list."
   type = map(object({
     model           = string
-    deployment_name = string
+    deployment_name = optional(string)
     task            = string
     table_prefix    = string
+    provider        = optional(string, "openai")
+    api_key_secret  = optional(string)
   }))
   default = {}
+}
+
+variable "model_serving_budget_policy_id" {
+  description = "Databricks budget policy (serverless usage policy) ID attached to every model serving endpoint for cost attribution — from: cd environments/account && terraform output budget_policy_ids. Null = no policy. Unused while enable_model_serving = false."
+  type        = string
+  default     = null
+  nullable    = true
+}
+
+variable "model_serving_guardrails" {
+  description = "AI Gateway guardrails override (input/output safety + PII behavior). Null = use gateway_defaults.guardrails from model_defaults.yaml. Unused while enable_model_serving = false."
+  type = object({
+    input = optional(object({
+      safety       = optional(bool, false)
+      pii_behavior = optional(string)
+    }))
+    output = optional(object({
+      safety       = optional(bool, false)
+      pii_behavior = optional(string)
+    }))
+  })
+  default  = null
+  nullable = true
+}
+
+variable "model_serving_endpoint_permissions_enabled" {
+  description = "Manage endpoint-level ACLs (CAN_QUERY / CAN_MANAGE). Set false on workspaces where the inference-endpoint ACL feature is not enabled by the account admin."
+  type        = bool
+  default     = true
 }
 
 variable "workspace_groups" {

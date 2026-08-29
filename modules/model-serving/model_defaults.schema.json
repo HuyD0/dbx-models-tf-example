@@ -3,40 +3,51 @@
   "title": "model_defaults",
   "description": "Schema for modules/model-serving/model_defaults.yaml — validated by check-jsonschema in pre-commit and CI.",
   "type": "object",
-  "required": ["allowed_external_models", "allowed_foundation_entities", "external_endpoints", "foundation_endpoints", "disabled_foundation_models"],
+  "required": ["allowed_external_models", "allowed_foundation_entities", "external_endpoints", "foundation_endpoints", "disabled_foundation_models", "gateway_defaults"],
   "additionalProperties": false,
   "properties": {
     "allowed_external_models": {
-      "description": "Approved Azure OpenAI model names. Every model field in external_endpoints and additional_external_endpoints must be present here.",
+      "description": "Approved external model names (Azure OpenAI deployments or other providers). Every model field in external_endpoints and additional_external_endpoints must be present here.",
       "type": "array",
       "items": { "type": "string", "minLength": 1 },
       "uniqueItems": true
     },
     "allowed_foundation_entities": {
-      "description": "Approved Databricks Foundation Model entity names. Every entity_name in foundation_endpoints and additional_foundation_endpoints must be present here.",
+      "description": "Approved Databricks Foundation Model entity names, exactly as returned by GET /api/2.0/serving-endpoints (hyphens and dots allowed).",
       "type": "array",
       "items": {
         "type": "string",
-        "pattern": "^system\\.ai\\.[a-z0-9_]+$"
+        "pattern": "^system\\.ai\\.[a-z0-9._-]+$"
       },
       "uniqueItems": true
     },
     "external_endpoints": {
-      "description": "Azure OpenAI / AI Foundry model endpoints served via Databricks external model serving.",
+      "description": "External model endpoints served via Databricks external model serving. Default provider is Azure OpenAI (openai); anthropic entries call the Anthropic API directly with a secret-referenced key.",
       "type": "object",
       "minProperties": 1,
       "additionalProperties": {
         "type": "object",
-        "required": ["model", "deployment_name", "task", "table_prefix"],
+        "required": ["model", "task", "table_prefix"],
         "additionalProperties": false,
         "properties": {
           "model": {
             "type": "string",
             "minLength": 1
           },
+          "provider": {
+            "description": "External model provider. openai (default) targets the Azure AI Foundry account via Entra ID; anthropic targets the Anthropic API with api_key_secret.",
+            "type": "string",
+            "enum": ["openai", "anthropic"]
+          },
           "deployment_name": {
+            "description": "Azure OpenAI deployment name. Required for provider: openai; ignored for other providers.",
             "type": "string",
             "minLength": 1
+          },
+          "api_key_secret": {
+            "description": "Databricks secret path '<scope>/<key>' holding the provider API key. Required for provider: anthropic; the secret must already exist in the workspace.",
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
           },
           "task": {
             "type": "string",
@@ -47,26 +58,31 @@
             "type": "string",
             "pattern": "^[a-z][a-z0-9_]*$"
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "provider": { "const": "anthropic" } },
+              "required": ["provider"]
+            },
+            "then": { "required": ["api_key_secret"] },
+            "else": { "required": ["deployment_name"] }
+          }
+        ]
       }
     },
     "foundation_endpoints": {
-      "description": "Databricks Foundation Model API endpoints (system.ai.* entity names).",
+      "description": "Pre-provisioned `databricks-*` Foundation Model API endpoints governed in place via scripts/apply-ai-gateway.sh (rate limits + inference tables).",
       "type": "object",
       "additionalProperties": {
         "type": "object",
-        "required": ["entity_name", "entity_version"],
+        "required": ["table_prefix"],
         "additionalProperties": false,
         "properties": {
-          "entity_name": {
-            "description": "Fully-qualified Foundation Model entity name, e.g. system.ai.claude_sonnet_4_6",
+          "table_prefix": {
+            "description": "Per-endpoint inference table name suffix (prepended by the workspace prefix). Must be a valid Unity Catalog table-name component.",
             "type": "string",
-            "pattern": "^system\\.ai\\.[a-z0-9_]+$"
-          },
-          "entity_version": {
-            "description": "Entity version string (must be quoted in YAML to stay a string).",
-            "type": "string",
-            "pattern": "^[0-9]+$"
+            "pattern": "^[a-z][a-z0-9_]*$"
           }
         }
       }
@@ -79,6 +95,62 @@
         "minLength": 1
       },
       "uniqueItems": true
+    },
+    "gateway_defaults": {
+      "description": "Default AI Gateway policy applied to every governed endpoint — consumed by modules/model-serving (Terraform-managed external endpoints, unless overridden per-workspace via model_serving_rate_limits / model_serving_guardrails) and by scripts/apply-ai-gateway.sh (pre-provisioned databricks-* endpoints).",
+      "type": "object",
+      "required": ["rate_limits"],
+      "additionalProperties": false,
+      "properties": {
+        "rate_limits": {
+          "type": "object",
+          "required": ["endpoint_qpm", "user_qpm"],
+          "additionalProperties": false,
+          "properties": {
+            "endpoint_qpm": {
+              "description": "Queries per minute allowed across the whole endpoint.",
+              "type": "integer",
+              "minimum": 0
+            },
+            "endpoint_tpm": {
+              "description": "Optional tokens per minute allowed across the whole endpoint. Omit for no token limit.",
+              "type": "integer",
+              "minimum": 0
+            },
+            "user_qpm": {
+              "description": "Queries per minute allowed per user.",
+              "type": "integer",
+              "minimum": 0
+            },
+            "user_group_limits": {
+              "description": "Optional per-group limits (max 5 — Databricks allows at most 5 group-scoped rate limits per endpoint).",
+              "type": "array",
+              "maxItems": 5,
+              "items": {
+                "type": "object",
+                "required": ["group", "qpm"],
+                "additionalProperties": false,
+                "properties": {
+                  "group": { "type": "string", "minLength": 1 },
+                  "qpm": { "type": "integer", "minimum": 0 },
+                  "tpm": { "type": "integer", "minimum": 0 }
+                }
+              }
+            }
+          }
+        },
+        "guardrails": {
+          "description": "Optional default AI Guardrails. Omit the whole object for no guardrails.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "input_safety": { "type": "boolean" },
+            "input_pii_behavior": { "type": "string", "enum": ["NONE", "BLOCK", "MASK"] },
+            "output_safety": { "type": "boolean" },
+            "output_pii_behavior": { "type": "string", "enum": ["NONE", "BLOCK", "MASK"] }
+          }
+        }
+      }
     }
   }
 }

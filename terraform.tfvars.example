@@ -21,3 +21,7 @@ tags = {
   data_sensitivity = "public"
   shortcode        = "aiml"
 }
+
+# Budget (serverless usage) policy for endpoint cost attribution — from:
+#   cd environments/account && terraform output budget_policy_ids
+# model_serving_budget_policy_id = "00000000-0000-0000-0000-000000000000"

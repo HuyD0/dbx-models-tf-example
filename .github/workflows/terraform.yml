@@ -7,12 +7,18 @@ on:
       - "**.tfvars.example"
       - "**/model_defaults.yaml"
       - "**/model_defaults.schema.json"
+      - "**/budget_defaults.yaml"
+      - "**/budget_defaults.schema.json"
       - ".github/workflows/terraform.yml"
   push:
     branches: [main]
     paths:
       - "**.tf"
       - "**/model_defaults.yaml"
+      - "**/model_defaults.schema.json"
+      - "**/budget_defaults.yaml"
+      - "**/budget_defaults.schema.json"
+      - ".github/workflows/terraform.yml"
 
 permissions:
   id-token: write   # required for OIDC
@@ -30,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        env: [dbx-dev, dbx-uat]
+        env: [account, dbx-dev, dbx-uat]
     steps:
       - uses: actions/checkout@v4
 
@@ -38,12 +44,15 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: validate model_defaults.yaml
+      - name: validate governance YAML (model_defaults + budget_defaults)
         run: |
           pip install --quiet check-jsonschema
           check-jsonschema \
             --schemafile modules/model-serving/model_defaults.schema.json \
             modules/model-serving/model_defaults.yaml
+          check-jsonschema \
+            --schemafile environments/account/budget_defaults.schema.json \
+            environments/account/budget_defaults.yaml
 
       - name: terraform fmt
         run: terraform fmt -check -recursive

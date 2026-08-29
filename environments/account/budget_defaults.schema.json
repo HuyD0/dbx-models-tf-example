@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "budget_defaults",
+  "description": "Schema for environments/account/budget_defaults.yaml — validated by check-jsonschema in pre-commit and CI.",
+  "type": "object",
+  "required": ["budgets", "budget_policies"],
+  "additionalProperties": false,
+  "properties": {
+    "budgets": {
+      "description": "Account-level budgets (databricks_budget). Key = Terraform resource key.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["display_name", "alerts"],
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "resource_type": {
+            "description": "ALL_RESOURCES (default; up to 24h alert lag) or UNITY_AI_GATEWAY (LLM spend, near-real-time, supports block_usage).",
+            "type": "string",
+            "enum": ["ALL_RESOURCES", "UNITY_AI_GATEWAY"]
+          },
+          "filter": {
+            "description": "Optional usage filter. Omit to track the whole account.",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "workspaces": {
+                "description": "Workspace names — must be keys of the workspace_ids Terraform variable.",
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 },
+                "uniqueItems": true
+              },
+              "tags": {
+                "description": "Custom-tag filters: tag key → allowed values (IN match).",
+                "type": "object",
+                "minProperties": 1,
+                "additionalProperties": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": { "type": "string", "minLength": 1 },
+                  "uniqueItems": true
+                }
+              }
+            }
+          },
+          "alerts": {
+            "description": "Up to 4 alerts, each with a unique monthly USD threshold.",
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": {
+              "type": "object",
+              "required": ["threshold_usd"],
+              "additionalProperties": false,
+              "properties": {
+                "threshold_usd": {
+                  "description": "Monthly cumulative-spend threshold in USD list price. String — the API models it as a decimal.",
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)?$"
+                },
+                "emails": {
+                  "type": "array",
+                  "items": { "type": "string", "format": "email" },
+                  "uniqueItems": true
+                },
+                "block_usage": {
+                  "description": "Reject further AI Gateway traffic past the threshold (UNITY_AI_GATEWAY budgets only; approximate enforcement).",
+                  "type": "boolean"
+                }
+              },
+              "anyOf": [
+                { "required": ["emails"], "properties": { "emails": { "minItems": 1 } } },
+                { "required": ["block_usage"], "properties": { "block_usage": { "const": true } } }
+              ]
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "alerts": {
+                  "contains": {
+                    "properties": { "block_usage": { "const": true } },
+                    "required": ["block_usage"]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": { "resource_type": { "const": "UNITY_AI_GATEWAY" } },
+              "required": ["resource_type"]
+            }
+          }
+        ]
+      }
+    },
+    "budget_policies": {
+      "description": "Budget policies / serverless usage policies (databricks_budget_policy). Key = Terraform resource key, referenced by the budget_policy_ids output.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["policy_name", "custom_tags"],
+        "additionalProperties": false,
+        "properties": {
+          "policy_name": {
+            "description": "Unique policy name (shown in the Databricks UI).",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 127
+          },
+          "custom_tags": {
+            "description": "Tags stamped onto system.billing.usage records for usage run under this policy (max 20). budget-policy-* keys are reserved by Databricks.",
+            "type": "object",
+            "minProperties": 1,
+            "maxProperties": 20,
+            "propertyNames": {
+              "not": { "enum": ["budget-policy-name", "budget-policy-id", "budget-policy-resolution-result"] }
+            },
+            "additionalProperties": { "type": "string", "minLength": 1 }
+          },
+          "user_groups": {
+            "description": "Account-level groups granted roles/budgetPolicy.user (may attach the policy to their resources).",
+            "type": "array",
+            "items": { "type": "string", "pattern": "^ad-dbx" },
+            "uniqueItems": true
+          },
+          "manager_groups": {
+            "description": "Account-level groups granted roles/budgetPolicy.manager (use + edit + manage permissions).",
+            "type": "array",
+            "items": { "type": "string", "pattern": "^ad-dbx" },
+            "uniqueItems": true
+          },
+          "bind_workspaces": {
+            "description": "Workspace names the policy is restricted to — must be keys of the workspace_ids Terraform variable. Empty/omitted = usable account-wide.",
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "uniqueItems": true
+          }
+        }
+      }
+    }
+  }
+}

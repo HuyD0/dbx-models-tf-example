@@ -6,7 +6,7 @@ terraform {
     }
     databricks = {
       source                = "databricks/databricks"
-      version               = "~> 1.115"
+      version               = "~> 1.126"
       configuration_aliases = [databricks, databricks.accounts]
     }
   }
@@ -138,6 +138,7 @@ module "model_serving" {
   consumer_groups               = var.consumer_groups
   admin_groups                  = var.model_serving_admin_groups
   guardrails                    = var.model_serving_guardrails
+  budget_policy_id              = var.model_serving_budget_policy_id
   databricks_tags               = local.databricks_tags
 
   providers = {

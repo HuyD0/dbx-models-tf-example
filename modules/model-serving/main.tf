@@ -10,7 +10,7 @@ terraform {
     }
     databricks = {
       source  = "databricks/databricks"
-      version = ">= 1.60, < 2.0"
+      version = ">= 1.126.0, < 2.0"
     }
   }
 }
@@ -27,10 +27,66 @@ locals {
   allowed_external_models     = toset(local._model_defaults.allowed_external_models)
   allowed_foundation_entities = toset(local._model_defaults.allowed_foundation_entities)
 
-  endpoints = merge(
-    var.external_endpoints != null ? var.external_endpoints : local.default_external_endpoints,
-    var.additional_external_endpoints,
+  # Normalize endpoint entries so YAML-sourced maps (which omit optional
+  # keys) and typed variables share one shape. provider defaults to openai.
+  endpoints = {
+    for name, e in merge(
+      var.external_endpoints != null ? var.external_endpoints : local.default_external_endpoints,
+      var.additional_external_endpoints,
+      ) : name => {
+      model           = e.model
+      deployment_name = try(e.deployment_name, null)
+      task            = e.task
+      table_prefix    = e.table_prefix
+      provider        = coalesce(try(e.provider, null), "openai")
+      api_key_secret  = try(e.api_key_secret, null)
+    }
+  }
+
+  # ── Default AI Gateway policy (model_defaults.yaml → gateway_defaults) ──────
+  # Workspace-level variables override the YAML; empty/null variables fall
+  # back to these centrally-governed defaults.
+  _gateway_defaults = local._model_defaults.gateway_defaults
+
+  default_rate_limits = concat(
+    [{
+      calls          = local._gateway_defaults.rate_limits.endpoint_qpm
+      key            = "endpoint"
+      renewal_period = "minute"
+      tokens         = try(local._gateway_defaults.rate_limits.endpoint_tpm, null)
+      principal      = null
+    }],
+    [{
+      calls          = local._gateway_defaults.rate_limits.user_qpm
+      key            = "user"
+      renewal_period = "minute"
+      tokens         = null
+      principal      = null
+    }],
+    [for g in try(local._gateway_defaults.rate_limits.user_group_limits, []) : {
+      calls          = g.qpm
+      key            = "user_group"
+      renewal_period = "minute"
+      tokens         = try(g.tpm, null)
+      principal      = g.group
+    }],
   )
+
+  effective_rate_limits = length(var.rate_limits) > 0 ? var.rate_limits : local.default_rate_limits
+
+  _yaml_guardrails = try(local._model_defaults.gateway_defaults.guardrails, null)
+  default_guardrails = local._yaml_guardrails == null ? null : {
+    input = {
+      safety       = try(local._yaml_guardrails.input_safety, false)
+      pii_behavior = try(local._yaml_guardrails.input_pii_behavior, null)
+    }
+    output = {
+      safety       = try(local._yaml_guardrails.output_safety, false)
+      pii_behavior = try(local._yaml_guardrails.output_pii_behavior, null)
+    }
+  }
+
+  effective_guardrails = var.guardrails != null ? var.guardrails : local.default_guardrails
 
   # Foundation Model API governance is fully YAML-driven. Surface the lists
   # to ops scripts and outputs only.
@@ -89,6 +145,11 @@ resource "databricks_model_serving" "endpoints" {
 
   name = each.key
 
+  # Serverless usage policy for cost attribution. In-place update; null = no
+  # policy. Not applied by the platform to external-model endpoints today —
+  # see var.budget_policy_id.
+  budget_policy_id = var.budget_policy_id
+
   dynamic "tags" {
     for_each = var.databricks_tags
     content {
@@ -97,13 +158,16 @@ resource "databricks_model_serving" "endpoints" {
     }
   }
 
+  # Never remove the whole ai_gateway block from an existing endpoint —
+  # disable features field-by-field (enabled = false) instead. The provider
+  # panics on updates that drop the block entirely.
   ai_gateway {
     usage_tracking_config {
       enabled = true
     }
 
     dynamic "guardrails" {
-      for_each = var.guardrails == null ? [] : [var.guardrails]
+      for_each = local.effective_guardrails == null ? [] : [local.effective_guardrails]
       content {
         dynamic "input" {
           for_each = guardrails.value.input == null ? [] : [guardrails.value.input]
@@ -133,7 +197,7 @@ resource "databricks_model_serving" "endpoints" {
     }
 
     dynamic "rate_limits" {
-      for_each = var.rate_limits
+      for_each = local.effective_rate_limits
       content {
         calls          = rate_limits.value.calls
         key            = rate_limits.value.key
@@ -156,16 +220,29 @@ resource "databricks_model_serving" "endpoints" {
       name = each.key
       external_model {
         name     = each.value.model
-        provider = "openai"
+        provider = each.value.provider
         task     = each.value.task
-        openai_config {
-          openai_api_type               = "azuread"
-          openai_api_base               = data.azurerm_cognitive_account.aif.endpoint
-          openai_api_version            = var.openai_api_version
-          openai_deployment_name        = each.value.deployment_name
-          microsoft_entra_tenant_id     = azuread_service_principal.model_serving.application_tenant_id
-          microsoft_entra_client_id     = azuread_application.model_serving.client_id
-          microsoft_entra_client_secret = "{{secrets/${databricks_secret_scope.model_serving.name}/sp-client-secret}}"
+
+        dynamic "openai_config" {
+          for_each = each.value.provider == "openai" ? [1] : []
+          content {
+            openai_api_type               = "azuread"
+            openai_api_base               = data.azurerm_cognitive_account.aif.endpoint
+            openai_api_version            = var.openai_api_version
+            openai_deployment_name        = each.value.deployment_name
+            microsoft_entra_tenant_id     = azuread_service_principal.model_serving.application_tenant_id
+            microsoft_entra_client_id     = azuread_application.model_serving.client_id
+            microsoft_entra_client_secret = "{{secrets/${databricks_secret_scope.model_serving.name}/sp-client-secret}}"
+          }
+        }
+
+        # Anthropic API key is a secret REFERENCE to a pre-existing workspace
+        # secret — the key value never enters Terraform state or API responses.
+        dynamic "anthropic_config" {
+          for_each = each.value.provider == "anthropic" ? [1] : []
+          content {
+            anthropic_api_key = "{{secrets/${each.value.api_key_secret}}}"
+          }
         }
       }
     }
@@ -177,6 +254,16 @@ resource "databricks_model_serving" "endpoints" {
     precondition {
       condition     = contains(local.allowed_external_models, each.value.model)
       error_message = "External endpoint '${each.key}' uses model '${each.value.model}' which is not in allowed_external_models in model_defaults.yaml. Add it to the allowlist before deploying."
+    }
+
+    precondition {
+      condition     = each.value.provider != "openai" || each.value.deployment_name != null
+      error_message = "External endpoint '${each.key}' uses provider 'openai' and must set deployment_name (the Azure OpenAI deployment to target)."
+    }
+
+    precondition {
+      condition     = each.value.provider != "anthropic" || can(regex("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$", each.value.api_key_secret))
+      error_message = "External endpoint '${each.key}' uses provider 'anthropic' and must set api_key_secret to a '<scope>/<key>' Databricks secret path."
     }
   }
 }
@@ -192,6 +279,8 @@ resource "databricks_model_serving" "endpoints" {
 resource "databricks_model_serving" "gpt_chat_fallback" {
   count = var.fallback_enabled ? 1 : 0
   name  = "azure-gpt-chat-fallback"
+
+  budget_policy_id = var.budget_policy_id
 
   dynamic "tags" {
     for_each = var.databricks_tags
@@ -211,7 +300,7 @@ resource "databricks_model_serving" "gpt_chat_fallback" {
     }
 
     dynamic "guardrails" {
-      for_each = var.guardrails == null ? [] : [var.guardrails]
+      for_each = local.effective_guardrails == null ? [] : [local.effective_guardrails]
       content {
         dynamic "input" {
           for_each = guardrails.value.input == null ? [] : [guardrails.value.input]
@@ -241,7 +330,7 @@ resource "databricks_model_serving" "gpt_chat_fallback" {
     }
 
     dynamic "rate_limits" {
-      for_each = var.rate_limits
+      for_each = local.effective_rate_limits
       content {
         calls          = rate_limits.value.calls
         key            = rate_limits.value.key

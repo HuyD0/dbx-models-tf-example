@@ -1,0 +1,92 @@
+# ── Cost governance source of truth (account scope) ─────────────────────────
+# This file is the SINGLE source of truth for:
+#   • account-level budgets (monthly USD list-price monitors + email alerts,
+#     optionally scoped to Unity AI Gateway / LLM spend)
+#   • budget policies — "serverless usage policies" in the Databricks UI —
+#     whose custom tags are stamped onto system.billing.usage records for
+#     chargeback/showback
+#
+# Consumed by environments/account/budgets.tf. Validated against
+# budget_defaults.schema.json by pre-commit and CI.
+#
+# Deliberately separate from modules/model-serving/model_defaults.yaml: that
+# file's hash re-triggers the per-workspace AI-gateway reconciler, and budget
+# edits must not cause workspace-side re-applies.
+#
+# Notes:
+#   • Budget spend = usage × USD list price (discounts/credits ignored);
+#     alerts for ALL_RESOURCES budgets can lag usage by up to 24h.
+#     UNITY_AI_GATEWAY budgets track LLM spend near-real-time and cover
+#     pay-per-token foundation models (including the pre-provisioned
+#     `databricks-*` endpoints Terraform cannot manage), ai_query batch
+#     inference, and external models — but NOT provisioned throughput.
+#   • block_usage: true (UNITY_AI_GATEWAY budgets only) rejects further AI
+#     Gateway traffic once the threshold is crossed. Enforcement is
+#     approximate — in-flight requests finish — so treat it as a brake,
+#     not an absolute spend cap.
+#   • Tag filters match custom tags on billing records (endpoint tags for
+#     AI Gateway budgets). The workspace-stack module stamps cost_center on
+#     every endpoint (defaults to the team name), which is what the filters
+#     below key on. Untagged usage silently falls outside a tag-filtered
+#     budget — keep at least one unfiltered budget as a catch-all.
+#   • filter.workspaces / bind_workspaces entries must be keys of the
+#     workspace_ids variable (name → numeric workspace ID), e.g.:
+#       filter:
+#         workspaces: [dbx-dev]
+
+budgets:
+  # Near-real-time monitor for ALL LLM spend in the account: external model
+  # endpoints, governed foundation endpoints, and blocked-model attempts.
+  llm-spend-monthly:
+    display_name: llm-spend-monthly
+    resource_type: UNITY_AI_GATEWAY
+    filter:
+      tags:
+        cost_center:
+          - dbx-dev
+    alerts:
+      - threshold_usd: "500"
+        emails:
+          - mlops-team@example.com
+      - threshold_usd: "1000"
+        emails:
+          - mlops-team@example.com
+          - finops@example.com
+        # Flip to true to reject further AI Gateway traffic past $1000/month:
+        block_usage: false
+
+  # Catch-all monitor for total account spend (no filter = whole account).
+  platform-spend-monthly:
+    display_name: platform-spend-monthly
+    resource_type: ALL_RESOURCES
+    alerts:
+      - threshold_usd: "2000"
+        emails:
+          - platform-team@example.com
+      - threshold_usd: "5000"
+        emails:
+          - platform-team@example.com
+          - finops@example.com
+
+# Budget policies ("serverless usage policies"). Attach to serving endpoints
+# via each workspace env's model_serving_budget_policy_id (see
+# `terraform output budget_policy_ids`); the policy's custom tags then land
+# on that endpoint's system.billing.usage records.
+#
+# The deployment SP is always granted manager on every policy (required so
+# endpoint applies that set budget_policy_id are accepted). user_groups get
+# roles/budgetPolicy.user; manager_groups get roles/budgetPolicy.manager.
+#
+# Optional per-policy fields:
+#   user_groups:                # groups that may attach the policy
+#     - ad-dbx-team-a
+#   manager_groups:             # groups that may edit the policy
+#     - ad-dbx
+#   bind_workspaces:            # empty/omitted = usable account-wide
+#     - dbx-dev
+budget_policies:
+  llm-serving-dev:
+    policy_name: llm-serving-dev
+    custom_tags:
+      cost_center: dbx-dev
+      workload: llm-serving

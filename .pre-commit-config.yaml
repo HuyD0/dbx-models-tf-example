@@ -39,6 +39,12 @@ repos:
         args:
           - --schemafile
           - modules/model-serving/model_defaults.schema.json
+      - id: check-jsonschema
+        name: validate budget_defaults.yaml
+        files: ^environments/account/budget_defaults\.yaml$
+        args:
+          - --schemafile
+          - environments/account/budget_defaults.schema.json
 
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.21.2
