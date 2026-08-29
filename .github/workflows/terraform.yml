@@ -35,6 +35,7 @@ jobs:
     name: fmt + validate + lint + scan
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         env: [account, dbx-dev, dbx-uat]
     steps:
@@ -57,20 +58,12 @@ jobs:
       - name: terraform fmt
         run: terraform fmt -check -recursive
 
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: terraform init
+      # -backend=false: validate/lint/scan need providers and modules, not
+      # remote state — so this job runs without any Azure credentials and
+      # stays green even when cloud auth is broken. Only `plan` logs in.
+      - name: terraform init (no backend)
         working-directory: environments/${{ matrix.env }}
-        env:
-          ARM_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
-          ARM_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
-          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        run: terraform init -input=false
+        run: terraform init -backend=false -input=false
 
       - name: terraform validate
         working-directory: environments/${{ matrix.env }}
@@ -96,6 +89,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         env: [dbx-dev, dbx-uat]
     steps:
