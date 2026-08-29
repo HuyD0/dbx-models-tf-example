@@ -5,79 +5,94 @@ variable "team" {
 }
 
 variable "location" {
-  type    = string
-  default = "eastus2"
+  description = "Azure region for all resources."
+  type        = string
+  default     = "eastus2"
 }
 
 variable "resource_group_name" {
-  type    = string
-  default = "rg-databricks-dbx-dev"
+  description = "Name of the resource group that will hold all Databricks resources."
+  type        = string
+  default     = "rg-databricks-dbx-dev"
 }
 
 variable "workspace_name" {
-  type    = string
-  default = "dbx-dev"
+  description = "Azure Databricks workspace name."
+  type        = string
+  default     = "dbx-dev"
 }
 
 variable "sku" {
-  type    = string
-  default = "premium"
+  description = "Databricks workspace SKU (standard, premium, or trial). Premium is required for endpoint ACLs."
+  type        = string
+  default     = "premium"
 }
 
 variable "tags" {
-  type    = map(string)
-  default = {}
+  description = "Azure resource tags applied to every taggable resource."
+  type        = map(string)
+  default     = {}
 }
 
 variable "vnet_cidr" {
-  type    = string
-  default = "10.192.0.0/20"
+  description = "Address space for the VNet-injection network (public and private subnets are carved from it)."
+  type        = string
+  default     = "10.192.0.0/20"
 }
 
 variable "managed_resource_group_name" {
-  type     = string
-  default  = null
-  nullable = true
+  description = "Override for the Databricks-managed resource group name. Null = provider default."
+  type        = string
+  default     = null
+  nullable    = true
 }
 
 variable "no_public_ip" {
-  type    = bool
-  default = true
+  description = "Enable Secure Cluster Connectivity (no public IPs on cluster nodes)."
+  type        = bool
+  default     = true
 }
 
 variable "public_network_access_enabled" {
-  type    = bool
-  default = true
+  description = "Allow access to the workspace UI/API from public networks."
+  type        = bool
+  default     = true
 }
 
 variable "infrastructure_encryption_enabled" {
-  type    = bool
-  default = true
+  description = "Enable a second layer of encryption on the DBFS root storage."
+  type        = bool
+  default     = true
 }
 
 variable "ai_foundry_name" {
-  type    = string
-  default = "aif-huy-dev"
+  description = "Name of the Azure AI Foundry (Cognitive Services) account serving external models."
+  type        = string
+  default     = "aif-huy-dev"
 }
 
 variable "ai_foundry_resource_group" {
-  type    = string
-  default = "rg-aifoundry-dev"
+  description = "Resource group containing the Azure AI Foundry account."
+  type        = string
+  default     = "rg-aifoundry-dev"
 }
 
 variable "openai_api_version" {
-  type    = string
-  default = "2024-12-01-preview"
+  description = "Azure OpenAI API version targeted by external model endpoints."
+  type        = string
+  default     = "2024-12-01-preview"
 }
 
 variable "inference_table_catalog" {
-  type    = string
-  default = "main"
+  description = "Unity Catalog catalog receiving model-serving inference tables."
+  type        = string
+  default     = "main"
 }
 
 variable "inference_table_schema" {
-  type    = string
-  default = "model_serving_logs"
+  description = "Unity Catalog schema receiving model-serving inference tables."
+  type        = string
+  default     = "model_serving_logs"
 }
 
 variable "databricks_account_id" {

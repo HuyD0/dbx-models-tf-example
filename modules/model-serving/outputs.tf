@@ -3,6 +3,11 @@ output "endpoint_names" {
   value       = keys(databricks_model_serving.endpoints)
 }
 
+output "allowed_foundation_entities" {
+  description = "Approved system.ai.* Foundation Model entity names from model_defaults.yaml. Audit documentation surfaced for ops tooling — NOT an enforced allowlist: enforcement is the disabled_foundation_models deny-list applied by apply-ai-gateway.sh, which is fail-open for newly released endpoints."
+  value       = sort(tolist(local.allowed_foundation_entities))
+}
+
 output "governed_foundation_endpoints" {
   description = "Pre-provisioned `databricks-*` Foundation Model API endpoints governed via apply-ai-gateway.sh (rate limits + inference tables). Defined in modules/model-serving/model_defaults.yaml."
   value       = keys(local.governed_foundation_endpoints)

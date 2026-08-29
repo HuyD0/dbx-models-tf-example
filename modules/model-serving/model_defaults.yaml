@@ -91,6 +91,15 @@ foundation_endpoints:
 # Pre-provisioned `databricks-*` endpoints to BLOCK with rate_limit = 0.
 # Any request returns HTTP 429 immediately. Usage tracking stays on so
 # attempts are still recorded in system.serving.endpoint_usage.
+#
+# ⚠ This deny-list is FAIL-OPEN: when Databricks rolls out a new
+# pre-provisioned endpoint it is fully callable until someone adds it
+# here and an apply re-runs the reconciler. Review this list whenever
+# Databricks announces new pay-per-token models. (A fail-closed
+# alternative — revoking the default EXECUTE on system.ai and granting
+# per-model — requires account-team enablement and is out of scope for
+# this demo.) allowed_foundation_entities above is audit documentation,
+# not enforcement.
 disabled_foundation_models:
   - databricks-claude-sonnet-4-5
   - databricks-claude-haiku-4-5

@@ -1,12 +1,16 @@
 terraform {
+  required_version = ">= 1.9, < 2.0"
+
+  # Modules declare version FLOORS (>= x, < next-major) reflecting the
+  # features they actually use; environment roots own the tighter ~> pins.
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 4.0"
+      version = ">= 4.0, < 5.0"
     }
     databricks = {
       source                = "databricks/databricks"
-      version               = "~> 1.126"
+      version               = ">= 1.126.0, < 2.0"
       configuration_aliases = [databricks, databricks.accounts]
     }
   }

@@ -5,7 +5,13 @@
 crash.log
 crash.*.log
 
-# NOTE: .terraform.lock.hcl SHOULD be committed (provider version pinning).
+# NOTE: .terraform.lock.hcl SHOULD be committed for ROOT modules (envs,
+# bootstrap, examples) — provider version pinning. Locks inside modules/
+# are ignored (Terraform only honors the root's lock when a module is
+# consumed) — EXCEPT model-serving, which acts as its own root for
+# `terraform test`, so its lock is committed to pin the test providers.
+modules/**/.terraform.lock.hcl
+!modules/model-serving/.terraform.lock.hcl
 
 # Terraform plan files (may contain sensitive data)
 tfplan
