@@ -180,22 +180,33 @@ variable "model_serving_rate_limits" {
 variable "model_serving_external_endpoints" {
   type = map(object({
     model           = string
-    deployment_name = string
+    deployment_name = optional(string)
     task            = string
     table_prefix    = string
+    provider        = optional(string, "openai")
+    api_key_secret  = optional(string)
   }))
   default = null
 }
 
 variable "model_serving_additional_external_endpoints" {
-  description = "Extra external (Azure OpenAI) endpoints merged on top of the active set. Use to add a model without replacing defaults."
+  description = "Extra external endpoints merged on top of the active set. Use to add a model without replacing defaults. provider defaults to openai (Azure AI Foundry); anthropic entries require api_key_secret ('<scope>/<key>')."
   type = map(object({
     model           = string
-    deployment_name = string
+    deployment_name = optional(string)
     task            = string
     table_prefix    = string
+    provider        = optional(string, "openai")
+    api_key_secret  = optional(string)
   }))
   default = {}
+}
+
+variable "model_serving_budget_policy_id" {
+  description = "Databricks budget policy (serverless usage policy) ID attached to every model serving endpoint for cost attribution. From: cd environments/account && terraform output budget_policy_ids. Null = no policy."
+  type        = string
+  default     = null
+  nullable    = true
 }
 
 variable "model_serving_admin_groups" {

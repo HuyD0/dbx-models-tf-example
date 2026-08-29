@@ -7,12 +7,18 @@ on:
       - "**.tfvars.example"
       - "**/model_defaults.yaml"
       - "**/model_defaults.schema.json"
+      - "**/budget_defaults.yaml"
+      - "**/budget_defaults.schema.json"
       - ".github/workflows/terraform.yml"
   push:
     branches: [main]
     paths:
       - "**.tf"
       - "**/model_defaults.yaml"
+      - "**/model_defaults.schema.json"
+      - "**/budget_defaults.yaml"
+      - "**/budget_defaults.schema.json"
+      - ".github/workflows/terraform.yml"
 
 permissions:
   id-token: write   # required for OIDC
@@ -29,8 +35,9 @@ jobs:
     name: fmt + validate + lint + scan
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        env: [dbx-dev, dbx-uat]
+        env: [account, dbx-dev, dbx-uat]
     steps:
       - uses: actions/checkout@v4
 
@@ -38,30 +45,25 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: validate model_defaults.yaml
+      - name: validate governance YAML (model_defaults + budget_defaults)
         run: |
           pip install --quiet check-jsonschema
           check-jsonschema \
             --schemafile modules/model-serving/model_defaults.schema.json \
             modules/model-serving/model_defaults.yaml
+          check-jsonschema \
+            --schemafile environments/account/budget_defaults.schema.json \
+            environments/account/budget_defaults.yaml
 
       - name: terraform fmt
         run: terraform fmt -check -recursive
 
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: terraform init
+      # -backend=false: validate/lint/scan need providers and modules, not
+      # remote state — so this job runs without any Azure credentials and
+      # stays green even when cloud auth is broken. Only `plan` logs in.
+      - name: terraform init (no backend)
         working-directory: environments/${{ matrix.env }}
-        env:
-          ARM_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
-          ARM_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
-          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        run: terraform init -input=false
+        run: terraform init -backend=false -input=false
 
       - name: terraform validate
         working-directory: environments/${{ matrix.env }}
@@ -81,12 +83,20 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
 
+  # Requires working Azure OIDC: the sp-terraform-databricks app
+  # registration must carry federated identity credentials for this repo
+  # (subjects repo:<owner>/<repo>:pull_request and ...:ref:refs/heads/main).
+  # Until that exists the job can only fail at login (AADSTS70025), so it
+  # is gated behind an explicit opt-in: set the repository variable
+  # ENABLE_CI_PLAN=true (Settings → Secrets and variables → Actions →
+  # Variables) once the credentials are in place. Unset = skipped.
   plan:
     name: plan-${{ matrix.env }}
     needs: validate
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && vars.ENABLE_CI_PLAN == 'true'
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         env: [dbx-dev, dbx-uat]
     steps:

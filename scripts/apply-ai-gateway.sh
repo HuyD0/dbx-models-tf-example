@@ -13,7 +13,10 @@
 # Source of truth:
 #   modules/model-serving/model_defaults.yaml
 #     ├── foundation_endpoints        → governed (rate limits + inference table)
-#     └── disabled_foundation_models  → blocked (rate_limit = 0)
+#     ├── disabled_foundation_models  → blocked (rate_limit = 0)
+#     └── gateway_defaults            → rate limits + guardrails applied to
+#                                       every governed endpoint (same policy
+#                                       Terraform applies to external ones)
 #
 # Per-workspace input (from terraform output):
 #   workspace_url, inference_table_prefix, inference_table_catalog,
@@ -87,6 +90,56 @@ while IFS= read -r line; do GOVERNED_ENDPOINTS+=("$line"); done < <(yq -r '.foun
 DISABLED_ENDPOINTS=()
 while IFS= read -r line; do DISABLED_ENDPOINTS+=("$line"); done < <(yq -r '.disabled_foundation_models[]' "$YAML")
 
+# ── Default AI-gateway policy (gateway_defaults) ─────────────────────────────
+# The same defaults modules/model-serving applies to Terraform-managed
+# external endpoints. Composed once into JSON here, reused per endpoint.
+ENDPOINT_QPM=$(yq -r '.gateway_defaults.rate_limits.endpoint_qpm' "$YAML")
+USER_QPM=$(yq -r '.gateway_defaults.rate_limits.user_qpm' "$YAML")
+ENDPOINT_TPM=$(yq -r '.gateway_defaults.rate_limits.endpoint_tpm // ""' "$YAML")
+UG_COUNT=$(yq -r '.gateway_defaults.rate_limits.user_group_limits // [] | length' "$YAML")
+
+[[ "$ENDPOINT_QPM" =~ ^[0-9]+$ && "$USER_QPM" =~ ^[0-9]+$ ]] || {
+  echo "ERROR: gateway_defaults.rate_limits.{endpoint_qpm,user_qpm} missing or non-numeric in $YAML" >&2
+  exit 1
+}
+
+RATE_LIMITS_JSON=$(jq -n --argjson eqpm "$ENDPOINT_QPM" --argjson uqpm "$USER_QPM" '[
+  { calls: $eqpm, key: "endpoint", renewal_period: "minute" },
+  { calls: $uqpm, key: "user",     renewal_period: "minute" }
+]')
+if [[ -n "$ENDPOINT_TPM" && "$ENDPOINT_TPM" != "null" ]]; then
+  RATE_LIMITS_JSON=$(jq --argjson t "$ENDPOINT_TPM" '.[0].tokens = $t' <<<"$RATE_LIMITS_JSON")
+fi
+for ((i = 0; i < UG_COUNT; i++)); do
+  UG_GROUP=$(yq -r ".gateway_defaults.rate_limits.user_group_limits[$i].group" "$YAML")
+  UG_QPM=$(yq -r ".gateway_defaults.rate_limits.user_group_limits[$i].qpm" "$YAML")
+  UG_TPM=$(yq -r ".gateway_defaults.rate_limits.user_group_limits[$i].tpm // \"\"" "$YAML")
+  UG_ENTRY=$(jq -n --arg g "$UG_GROUP" --argjson q "$UG_QPM" \
+    '{ calls: $q, key: "user_group", principal: $g, renewal_period: "minute" }')
+  if [[ -n "$UG_TPM" && "$UG_TPM" != "null" ]]; then
+    UG_ENTRY=$(jq --argjson t "$UG_TPM" '.tokens = $t' <<<"$UG_ENTRY")
+  fi
+  RATE_LIMITS_JSON=$(jq --argjson e "$UG_ENTRY" '. + [$e]' <<<"$RATE_LIMITS_JSON")
+done
+
+# Guardrails: {} when the YAML omits them; merged into the governed payload.
+# Scalars are read with yq and composed with jq so the script works with
+# both yq flavors (kislyuk python-yq and mikefarah Go yq).
+GUARDRAILS_JSON='{}'
+if [[ "$(yq -r '.gateway_defaults | has("guardrails")' "$YAML")" == "true" ]]; then
+  GR_IN_SAFETY=$(yq -r '.gateway_defaults.guardrails.input_safety // false' "$YAML")
+  GR_IN_PII=$(yq -r '.gateway_defaults.guardrails.input_pii_behavior // ""' "$YAML")
+  GR_OUT_SAFETY=$(yq -r '.gateway_defaults.guardrails.output_safety // false' "$YAML")
+  GR_OUT_PII=$(yq -r '.gateway_defaults.guardrails.output_pii_behavior // ""' "$YAML")
+  GUARDRAILS_JSON=$(jq -n \
+    --argjson isafe "$GR_IN_SAFETY" --argjson osafe "$GR_OUT_SAFETY" \
+    --arg ipii "$GR_IN_PII" --arg opii "$GR_OUT_PII" '
+    { guardrails: {
+        input:  ({ safety: $isafe } + (if $ipii != "" and $ipii != "null" then { pii: { behavior: $ipii } } else {} end)),
+        output: ({ safety: $osafe } + (if $opii != "" and $opii != "null" then { pii: { behavior: $opii } } else {} end))
+    } }')
+fi
+
 # ── Acquire token once ────────────────────────────────────────────────────────
 TOKEN=$(az account get-access-token --resource "$DBX_AUDIENCE" --query accessToken -o tsv 2>/dev/null)
 [[ -n "$TOKEN" ]] || { echo "ERROR: failed to acquire Databricks token (run 'az login')" >&2; exit 1; }
@@ -138,16 +191,15 @@ reconcile_one() {
       --arg cat "$catalog" \
       --arg sch "$schema" \
       --arg tbl "$table_prefix" \
+      --argjson rl "$RATE_LIMITS_JSON" \
+      --argjson gr "$GUARDRAILS_JSON" \
       '{
         usage_tracking_config: { enabled: true },
-        rate_limits: [
-          { calls: 60, key: "endpoint", renewal_period: "minute" },
-          { calls: 20, key: "user",     renewal_period: "minute" }
-        ],
+        rate_limits: $rl,
         inference_table_config: {
           enabled: true, catalog_name: $cat, schema_name: $sch, table_name_prefix: $tbl
         }
-      }')
+      } + $gr')
     put_ai_gateway "$ws_url" "$ep" "$payload" || true
   done
 

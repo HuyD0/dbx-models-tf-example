@@ -41,17 +41,19 @@ The file has four top-level sections:
 
 | Section | Purpose |
 |---|---|
-| `allowed_external_models` | Approved Azure OpenAI model names. Terraform will refuse to plan any external endpoint whose `model` is not listed here. |
-| `allowed_foundation_entities` | Approved `system.ai.*` entity names. Same enforcement for foundation endpoints. |
-| `external_endpoints` | Default Azure OpenAI endpoints created when `var.external_endpoints = null`. |
-| `foundation_endpoints` | Default Databricks Foundation Model endpoints when `var.foundation_endpoints = null`. |
-| `disabled_foundation_models` | Foundation model names blocked at rate_limit = 0. |
+| `allowed_external_models` | Approved external model names (Azure OpenAI or other providers). Terraform will refuse to plan any external endpoint whose `model` is not listed here. |
+| `allowed_foundation_entities` | Approved `system.ai.*` entity names, for documentation/audit of the governed foundation endpoints. |
+| `external_endpoints` | Default external endpoints created when `var.external_endpoints = null`. Optional `provider` (`openai` default / `anthropic`) and `api_key_secret` fields per entry. |
+| `foundation_endpoints` | Pre-provisioned `databricks-*` endpoints governed in place by `scripts/apply-ai-gateway.sh` (rate limits + inference tables); each entry carries its `table_prefix`. |
+| `disabled_foundation_models` | Pre-provisioned `databricks-*` endpoint names blocked at rate_limit = 0 by the same script. |
+| `gateway_defaults` | Default AI Gateway policy — endpoint/user rate limits (QPM/TPM), optional per-group limits, optional guardrails — applied by Terraform to external endpoints and by the script to foundation endpoints. |
 
 The YAML is validated on every commit and PR by a `check-jsonschema`
-pre-commit hook and a dedicated `schema-check` CI job — both use
-`modules/model-serving/model_defaults.schema.json`. Override defaults
-per environment with the `model_serving_external_endpoints` and
-`model_serving_foundation_endpoints` variables.
+pre-commit hook and the CI validate job — both use
+`modules/model-serving/model_defaults.schema.json`. Override the external
+endpoint set per environment with the `model_serving_external_endpoints`
+and `model_serving_additional_external_endpoints` variables; foundation
+governance is YAML-only.
 
 ### External (Azure AI Foundry)
 
@@ -82,20 +84,21 @@ support `inference_table_config`** — payloads are not captured. Use the
 
 ### Disabled foundation endpoints (blocklist)
 
-The module additionally renders a `databricks_model_serving.disabled_
-foundation_endpoints` for_each over a blocklist of model names. Each
-entry creates an endpoint configured to point at the model but with
-`rate_limits { calls = 0 }`, so calls are rejected at the gateway. This
-is the supported way to **prevent users from invoking the long tail of
+The pre-provisioned `databricks-*` endpoints cannot be created, updated,
+or deleted by Terraform (reserved name prefix), so blocking happens
+out-of-band: `scripts/apply-ai-gateway.sh` PUTs an AI-gateway config with
+`rate_limits: [{ calls: 0, key: "endpoint" }]` on every endpoint listed in
+`disabled_foundation_models`, so calls are rejected with HTTP 429 at the
+gateway (usage tracking stays on, so attempts are still audited). This is
+the supported way to **prevent users from invoking the long tail of
 Databricks foundation models** that this platform has not approved.
 
-Defaults live in the `disabled_foundation_models` list in
-`modules/model-serving/model_defaults.yaml` and include
-the older Claude variants (sonnet-4-5, haiku-4-5, opus-4-5, opus-4-1,
-sonnet-4), the GPT-OSS, Qwen3, Llama 4, Gemma 3, and embedding models.
-Override per env via `model_serving_disabled_foundation_models` (a
-full list — passing `[]` re-enables everything; passing `null` keeps
-the module default from the YAML).
+The blocklist lives in `modules/model-serving/model_defaults.yaml` and
+includes the older Claude variants (sonnet-4-5, haiku-4-5, opus-4-5,
+opus-4-1, sonnet-4), the GPT-OSS, Qwen3, Llama 4, Gemma 3, and embedding
+models. There is no per-environment override — edit the YAML; the
+reconciler re-runs automatically on the next `terraform apply` (the YAML
+hash is a `terraform_data` trigger).
 
 ### Fallback router (optional)
 
@@ -116,10 +119,10 @@ when the primary is healthy. See §5 for the full picture.
 ### Adding an endpoint
 
 > **Always add to the allowlist first.** Terraform enforces `lifecycle
-> { precondition }` on both resource loops — any `model` or
-> `entity_name` not in `allowed_external_models` /
-> `allowed_foundation_entities` causes a hard plan failure with a
-> descriptive error message.
+> { precondition }` on the external endpoint loop — any `model` not in
+> `allowed_external_models` causes a hard plan failure with a
+> descriptive error message. Foundation endpoints are documented in
+> `allowed_foundation_entities` and enforced by the reconciler script.
 
 **Step 1 — update the YAML allowlist** (`modules/model-serving/model_defaults.yaml`):
 
@@ -157,21 +160,35 @@ model_serving_additional_external_endpoints = {
 The deployment with `deployment_name` must exist in the Foundry account
 named by `var.ai_foundry_name`. Same SP, same RBAC, same gateway settings.
 
-Foundation (same two-step pattern):
+External endpoints for other providers (e.g. Anthropic direct) follow the
+same pattern with two extra fields — the API key is a secret *reference*
+to a pre-existing workspace secret, so the key value never enters
+Terraform state:
+
+```yaml
+external_endpoints:
+  anthropic-claude-sonnet:
+    model: claude-sonnet-4-5        # ← must be in allowed_external_models
+    provider: anthropic
+    api_key_secret: llm-provider-keys/anthropic-api-key
+    task: llm/v1/chat
+    table_prefix: anthropic_claude_sonnet
+```
+
+Foundation (governed via the reconciler, not Terraform):
 
 ```yaml
 # model_defaults.yaml
 allowed_foundation_entities:
-  - system.ai.claude_sonnet_4_6
-  - system.ai.llama_3_70b   # ← add first
+  - system.ai.databricks-claude-sonnet-4-6
+  - system.ai.databricks-llama-3-70b   # ← add first
 
 foundation_endpoints:
   databricks-llama-3-70b:
-    entity_name: system.ai.llama_3_70b
-    entity_version: "1"
+    table_prefix: databricks_llama_3_70b
 ```
 
-Or per-environment only via `model_serving_additional_foundation_endpoints` in `terraform.tfvars`.
+(and remove the endpoint from `disabled_foundation_models` if present).
 
 ---
 
@@ -246,8 +263,13 @@ split.
 
 ### 2.3 Rate limits (`rate_limits`)
 
-Configured globally via the `model_serving_rate_limits` variable; the
-module renders one `rate_limits` block per rule on every endpoint:
+Defaults come from `gateway_defaults.rate_limits` in
+`model_defaults.yaml` (endpoint QPM/TPM, per-user QPM, optional per-group
+limits) — the same values `scripts/apply-ai-gateway.sh` applies to the
+foundation endpoints, so the whole fleet shares one centrally-governed
+policy. A workspace can override them with the
+`model_serving_rate_limits` variable; the module renders one
+`rate_limits` block per rule on every endpoint:
 
 ```hcl
 model_serving_rate_limits = [
@@ -264,9 +286,13 @@ Rule fields:
 |---|---|---|---|
 | `calls` | yes | — | Max requests per `renewal_period` |
 | `tokens` | no | `null` | Optional token budget per `renewal_period` |
-| `key` | no | `endpoint` | `user`, `endpoint`, or `principal` |
+| `key` | no | `endpoint` | `user`, `user_group`, `service_principal`, or `endpoint` |
 | `renewal_period` | no | `minute` | `minute` is currently the only supported value |
-| `principal` | no | `null` | Pin a rule to a specific user/SP |
+| `principal` | no | `null` | Required for `user_group` / `service_principal` keys (group display name / SP application ID) |
+
+Databricks allows at most 20 rate limits per endpoint, of which at most 5
+may be `user_group`-scoped; when both `calls` and `tokens` are set, the
+more restrictive gate wins. The module validates all of this at plan time.
 
 Per-user limits require the caller to authenticate as a Databricks
 identity. Calls made with a generic workspace PAT all collapse into the

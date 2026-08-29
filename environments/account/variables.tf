@@ -33,3 +33,9 @@ variable "teams" {
   default     = []
 }
 
+variable "workspace_ids" {
+  description = "Map of workspace name → numeric Databricks workspace ID, used to resolve the workspace names referenced by budget_defaults.yaml (budget filter.workspaces and policy bind_workspaces). Populate after each workspace applies: cd environments/<env> && terraform output workspace_resource_id — the reverse of the metastore_id handoff. Only needed for entries that reference workspaces."
+  type        = map(number)
+  default     = {}
+}
+

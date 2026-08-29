@@ -34,6 +34,9 @@ module "stack" {
   model_serving_external_endpoints            = var.model_serving_external_endpoints
   model_serving_additional_external_endpoints = var.model_serving_additional_external_endpoints
   model_serving_admin_groups                  = var.model_serving_admin_groups
+  model_serving_guardrails                    = var.model_serving_guardrails
+  model_serving_budget_policy_id              = var.model_serving_budget_policy_id
+  model_serving_endpoint_permissions_enabled  = var.model_serving_endpoint_permissions_enabled
 
   deployment_sp_client_id = var.deployment_sp_client_id
 

@@ -1,21 +1,23 @@
 # ── Model governance source of truth ────────────────────────────────────────
 # This file is the SINGLE source of truth for:
-#   • allowlisted external (Azure OpenAI) models
+#   • allowlisted external (Azure OpenAI / other provider) models
 #   • allowlisted Databricks Foundation Model API entities
 #   • blocklisted pre-provisioned `databricks-*` system endpoints
+#   • default AI Gateway policy (rate limits + guardrails)
 #
 # Consumed by:
 #   • modules/model-serving/main.tf      → preconditions enforce allowlists,
-#                                          generates ai-gateway-config.json
-#                                          for the out-of-band script.
-#   • scripts/apply-ai-gateway.sh        → applies rate limits + inference
-#                                          tables + blocklist via REST API.
+#                                          gateway_defaults become the default
+#                                          ai_gateway config on every endpoint.
+#   • scripts/apply-ai-gateway.sh        → applies gateway_defaults rate
+#                                          limits + inference tables +
+#                                          blocklist via REST API.
 #
-# When adding/removing a model, edit ONLY this file. Never duplicate these
-# lists in tfvars or bash scripts.
+# When adding/removing a model or changing the default policy, edit ONLY
+# this file. Never duplicate these lists in tfvars or bash scripts.
 
-# Approved external models (Azure OpenAI deployments). Any endpoint whose
-# `model` is not listed here fails `terraform plan`.
+# Approved external models (Azure OpenAI deployments or other providers).
+# Any endpoint whose `model` is not listed here fails `terraform plan`.
 allowed_external_models:
   - gpt-4o
   - gpt-5-mini
@@ -29,9 +31,25 @@ allowed_foundation_entities:
   - system.ai.databricks-claude-opus-4-6
   - system.ai.databricks-claude-opus-4-7
 
-# External (Azure OpenAI) endpoints created by the module as
-# databricks_model_serving resources. Each endpoint gets usage tracking,
-# inference tables, and the workspace-level rate limits.
+# External endpoints created by the module as databricks_model_serving
+# resources. Each endpoint gets usage tracking, inference tables, and the
+# gateway_defaults rate limits (or the workspace-level override).
+#
+# Optional per-endpoint fields:
+#   provider:        openai (default, Azure AI Foundry via Entra ID) or
+#                    anthropic (direct Anthropic API).
+#   api_key_secret:  "<scope>/<key>" Databricks secret path holding the
+#                    provider API key — required for provider: anthropic.
+#                    The secret must already exist in the workspace; the
+#                    key value itself never enters Terraform state.
+#
+#   # Example — Anthropic served directly through the same gateway:
+#   # anthropic-claude-sonnet:
+#   #   model: claude-sonnet-4-5
+#   #   provider: anthropic
+#   #   api_key_secret: llm-provider-keys/anthropic-api-key
+#   #   task: llm/v1/chat
+#   #   table_prefix: anthropic_claude_sonnet
 external_endpoints:
   azure-gpt-4o:
     model: gpt-4o
@@ -91,3 +109,33 @@ disabled_foundation_models:
   - databricks-meta-llama-3-3-70b-instruct
   - databricks-meta-llama-3.1-405b-instruct
   - databricks-qwen3-embedding-0-6b
+
+# Default AI Gateway policy applied to every governed endpoint:
+#   • Terraform-managed external endpoints use these rate limits unless the
+#     workspace overrides them via model_serving_rate_limits, and these
+#     guardrails unless overridden via model_serving_guardrails.
+#   • scripts/apply-ai-gateway.sh applies the same limits/guardrails to the
+#     pre-provisioned `databricks-*` foundation endpoints.
+#
+# Changing this section re-runs the foundation-endpoint reconciler on the
+# next `terraform apply` (the YAML hash is a trigger) and updates every
+# Terraform-managed endpoint in place.
+#
+# Optional knobs (see model_defaults.schema.json for the full shape):
+#
+#   gateway_defaults:
+#     rate_limits:
+#       endpoint_tpm: 500000        # tokens/min cap for the whole endpoint
+#       user_group_limits:          # per-team caps (max 5)
+#         - group: ad-dbx-team-a
+#           qpm: 40
+#           tpm: 200000
+#     guardrails:                   # omit for no guardrails
+#       input_safety: true
+#       input_pii_behavior: BLOCK   # NONE | BLOCK | MASK
+#       output_safety: false
+#       output_pii_behavior: NONE
+gateway_defaults:
+  rate_limits:
+    endpoint_qpm: 60  # calls/min across the whole endpoint
+    user_qpm: 20      # calls/min per user

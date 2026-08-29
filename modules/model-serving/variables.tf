@@ -51,7 +51,7 @@ variable "endpoint_permissions_enabled" {
 }
 
 variable "rate_limits" {
-  description = "Rate limit rules for the AI gateway. Each entry defines how many calls (and optionally tokens) are allowed per key within a renewal period."
+  description = "Rate limit rules for the AI gateway, overriding gateway_defaults.rate_limits in model_defaults.yaml. Each entry defines how many calls (and optionally tokens) are allowed per key within a renewal period. Empty = use the YAML defaults."
   type = list(object({
     calls          = number
     key            = optional(string, "endpoint")
@@ -60,29 +60,65 @@ variable "rate_limits" {
     principal      = optional(string)
   }))
   default = []
+
+  validation {
+    condition     = alltrue([for r in var.rate_limits : contains(["user", "user_group", "service_principal", "endpoint"], r.key)])
+    error_message = "rate_limits key must be one of: user, user_group, service_principal, endpoint."
+  }
+
+  validation {
+    condition     = alltrue([for r in var.rate_limits : r.principal != null if contains(["user_group", "service_principal"], r.key)])
+    error_message = "rate_limits entries with key = user_group or service_principal must set principal (group display name / SP application ID)."
+  }
+
+  validation {
+    condition     = length(var.rate_limits) <= 20 && length([for r in var.rate_limits : r if r.key == "user_group"]) <= 5
+    error_message = "Databricks allows at most 20 rate limits per endpoint, of which at most 5 may be user_group-scoped."
+  }
+}
+
+variable "budget_policy_id" {
+  description = "Databricks budget policy (serverless usage policy) ID attached to every serving endpoint for cost attribution — its custom tags are stamped onto system.billing.usage records. From: cd environments/account && terraform output budget_policy_ids. Null = no policy. NOTE: Databricks does not currently apply usage policies to endpoints serving external models — tag-filtered budgets remain the guaranteed attribution path for those; this attachment covers foundation/custom endpoints and is forward-looking for external ones."
+  type        = string
+  default     = null
+  nullable    = true
 }
 
 variable "external_endpoints" {
-  description = "External (Azure OpenAI) model serving endpoints. Set to null to use the built-in defaults defined in the module."
+  description = "External model serving endpoints. Set to null to use the built-in defaults defined in model_defaults.yaml. provider defaults to openai (Azure AI Foundry via Entra ID); anthropic entries require api_key_secret ('<scope>/<key>' Databricks secret path)."
   type = map(object({
     model           = string
-    deployment_name = string
+    deployment_name = optional(string)
     task            = string
     table_prefix    = string
+    provider        = optional(string, "openai")
+    api_key_secret  = optional(string)
   }))
   default  = null
   nullable = true
+
+  validation {
+    condition     = var.external_endpoints == null ? true : alltrue([for e in var.external_endpoints : contains(["openai", "anthropic"], e.provider)])
+    error_message = "external_endpoints provider must be openai or anthropic."
+  }
 }
 
 variable "additional_external_endpoints" {
-  description = "Extra external (Azure OpenAI) endpoints to merge on top of the active set (defaults or var.external_endpoints). Use this to add a new model without replacing the whole list."
+  description = "Extra external endpoints to merge on top of the active set (defaults or var.external_endpoints). Use this to add a new model without replacing the whole list. Same shape as external_endpoints."
   type = map(object({
     model           = string
-    deployment_name = string
+    deployment_name = optional(string)
     task            = string
     table_prefix    = string
+    provider        = optional(string, "openai")
+    api_key_secret  = optional(string)
   }))
   default = {}
+
+  validation {
+    condition     = alltrue([for e in var.additional_external_endpoints : contains(["openai", "anthropic"], e.provider)])
+    error_message = "additional_external_endpoints provider must be openai or anthropic."
+  }
 }
 
 variable "write_access_group" {
@@ -111,7 +147,7 @@ variable "admin_groups" {
 }
 
 variable "guardrails" {
-  description = "AI Gateway guardrails applied to every endpoint. Set input/output safety + PII behavior. Default null = no guardrails."
+  description = "AI Gateway guardrails applied to every endpoint, overriding gateway_defaults.guardrails in model_defaults.yaml. Set input/output safety + PII behavior. Default null = use the YAML defaults (no guardrails unless the YAML enables them)."
   type = object({
     input = optional(object({
       safety       = optional(bool, false)
