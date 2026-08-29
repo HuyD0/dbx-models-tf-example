@@ -51,6 +51,10 @@ DBX_AUDIENCE="2ff814a6-3304-4ab8-85cb-cd0e6f879c1d"
 DRY_RUN=false
 SINGLE=false
 TARGETS=()
+# Endpoints whose PUT failed. Every endpoint is still attempted (one bad
+# endpoint must not block the rest), but any failure fails the script —
+# and therefore `terraform apply` — so governance drift is never silent.
+FAILED=0
 
 # ── Arg parsing ───────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -178,6 +182,12 @@ put_ai_gateway() {
 reconcile_one() {
   local label="$1" ws_url="$2" team="$3" catalog="$4" schema="$5"
 
+  # Sanitize the prefix to a valid Unity Catalog table-name component,
+  # exactly like modules/model-serving/main.tf does for Terraform-managed
+  # endpoints ("dbx-dev" → "dbx_dev") — otherwise foundation-endpoint
+  # tables would get a hyphenated, invalid prefix.
+  team=$(printf '%s' "$team" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g')
+
   echo ""
   echo "── $label @ $ws_url"
   echo "   prefix=$team  catalog=$catalog  schema=$schema"
@@ -200,13 +210,13 @@ reconcile_one() {
           enabled: true, catalog_name: $cat, schema_name: $sch, table_name_prefix: $tbl
         }
       } + $gr')
-    put_ai_gateway "$ws_url" "$ep" "$payload" || true
+    put_ai_gateway "$ws_url" "$ep" "$payload" || FAILED=$((FAILED + 1))
   done
 
   echo "  Blocked:"
   local blocked_payload='{"usage_tracking_config":{"enabled":true},"rate_limits":[{"calls":0,"key":"endpoint","renewal_period":"minute"}]}'
   for ep in "${DISABLED_ENDPOINTS[@]}"; do
-    put_ai_gateway "$ws_url" "$ep" "$blocked_payload" || true
+    put_ai_gateway "$ws_url" "$ep" "$blocked_payload" || FAILED=$((FAILED + 1))
   done
 }
 
@@ -259,4 +269,8 @@ else
 fi
 
 echo ""
+if [[ "$FAILED" -gt 0 ]]; then
+  echo "ERROR: $FAILED endpoint(s) failed to reconcile — desired AI-gateway state is NOT fully applied." >&2
+  exit 1
+fi
 echo "Done."

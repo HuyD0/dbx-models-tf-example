@@ -13,10 +13,10 @@
 #   terraform import 'databricks_budget_policy.this["<key>"]' "<policy_id>"
 
 locals {
-  _budget_defaults = yamldecode(file("${path.module}/budget_defaults.yaml"))
+  budget_defaults = yamldecode(file("${path.module}/budget_defaults.yaml"))
 
-  budgets         = local._budget_defaults.budgets
-  budget_policies = local._budget_defaults.budget_policies
+  budgets         = local.budget_defaults.budgets
+  budget_policies = local.budget_defaults.budget_policies
 }
 
 # Monthly USD list-price monitors. resource_type UNITY_AI_GATEWAY scopes a

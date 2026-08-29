@@ -33,7 +33,8 @@ dbx-dev workspace ──► model serving endpoints ──► main.model_serving
    SQL warehouses, system tables, NCC, PrivateLink.
 2. **Unity Catalog**: metastores, catalogs, schemas, grants, external
    locations, storage credentials, lineage, audit, inference tables,
-   `metastore_force_destroy = false` in prod.
+   `force_destroy = false` on metastores/catalogs in prod (hardcoded in
+   this repo).
 3. **Databricks Model Serving & AI Gateway**: external model endpoints
    (Azure OpenAI / AI Foundry), foundation model endpoints (`system.ai.*`
    — Claude, Llama, Mistral, GTE, Qwen), provisioned throughput, usage
@@ -93,18 +94,20 @@ DevOps tooling, or any request to weaken security/audit controls.
 - **Model serving belongs to `dbx-dev`**: `enable_model_serving = true`,
   `create_main_catalog = true`. There is no separate catalog-only
   "platform" workspace in this repo.
-- **Foundation model blocklist**: managed in
-  `local.default_disabled_foundation_models` in `modules/model-serving/main.tf`.
-  Override per environment via `model_serving_disabled_foundation_models` (a
-  full list — `[]` re-enables everything; `null` keeps the module default).
-  Only the approved Claude 4.6/4.7 endpoints (`databricks-claude-sonnet-4-6`,
-  `databricks-claude-opus-4-6`, `databricks-claude-opus-4-7`) are enabled by
-  default; all others are blocked with `rate_limits { calls = 0 }`.
-- **Adding/removing endpoints**: use `model_serving_additional_external_endpoints`
-  or `model_serving_additional_foundation_endpoints` in `terraform.tfvars` to
-  extend the defaults without touching the module. Override entirely with
-  `model_serving_external_endpoints` / `model_serving_foundation_endpoints`
-  only when replacing the full set.
+- **Foundation model blocklist**: managed ONLY in
+  `modules/model-serving/model_defaults.yaml` (`disabled_foundation_models`),
+  applied out-of-band by `scripts/apply-ai-gateway.sh` — there is no
+  per-environment Terraform variable for it. Only the approved Claude
+  endpoints (`databricks-claude-sonnet-4-6`, `databricks-claude-opus-4-6`,
+  `databricks-claude-opus-4-7`, listed in `foundation_endpoints`) are
+  governed-and-enabled; the blocklisted ones get `rate_limits: calls = 0`.
+  The deny-list is fail-open for newly released `databricks-*` endpoints.
+- **Adding/removing endpoints**: external endpoints — use
+  `model_serving_additional_external_endpoints` in `terraform.tfvars` to
+  extend the defaults, or `model_serving_external_endpoints` to replace the
+  full set (models must be in `allowed_external_models`). Foundation
+  endpoints — edit `model_defaults.yaml` (`foundation_endpoints` /
+  `disabled_foundation_models`); the reconciler applies it.
 - **Never inline secrets**. Use Azure Key Vault + Databricks secret scopes
   and reference as `{{secrets/<scope>/<key>}}` in endpoint configs.
 - **AI gateway endpoints must enable**: `usage_tracking_config`,

@@ -1,4 +1,6 @@
 terraform {
+  required_version = ">= 1.9, < 2.0"
+
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
@@ -16,16 +18,16 @@ terraform {
 }
 
 locals {
-  _model_defaults = yamldecode(file("${path.module}/model_defaults.yaml"))
+  model_defaults = yamldecode(file("${path.module}/model_defaults.yaml"))
 
-  default_external_endpoints = local._model_defaults.external_endpoints
+  default_external_endpoints = local.model_defaults.external_endpoints
 
   # Approved allowlists — precondition blocks on each resource enforce these.
   # Foundation entities live in the YAML for documentation/audit; the
   # apply-ai-gateway.sh script reads the same YAML to govern the
   # pre-provisioned `databricks-*` endpoints (see comment block below).
-  allowed_external_models     = toset(local._model_defaults.allowed_external_models)
-  allowed_foundation_entities = toset(local._model_defaults.allowed_foundation_entities)
+  allowed_external_models     = toset(local.model_defaults.allowed_external_models)
+  allowed_foundation_entities = toset(local.model_defaults.allowed_foundation_entities)
 
   # Normalize endpoint entries so YAML-sourced maps (which omit optional
   # keys) and typed variables share one shape. provider defaults to openai.
@@ -46,24 +48,24 @@ locals {
   # ── Default AI Gateway policy (model_defaults.yaml → gateway_defaults) ──────
   # Workspace-level variables override the YAML; empty/null variables fall
   # back to these centrally-governed defaults.
-  _gateway_defaults = local._model_defaults.gateway_defaults
+  gateway_defaults = local.model_defaults.gateway_defaults
 
   default_rate_limits = concat(
     [{
-      calls          = local._gateway_defaults.rate_limits.endpoint_qpm
+      calls          = local.gateway_defaults.rate_limits.endpoint_qpm
       key            = "endpoint"
       renewal_period = "minute"
-      tokens         = try(local._gateway_defaults.rate_limits.endpoint_tpm, null)
+      tokens         = try(local.gateway_defaults.rate_limits.endpoint_tpm, null)
       principal      = null
     }],
     [{
-      calls          = local._gateway_defaults.rate_limits.user_qpm
+      calls          = local.gateway_defaults.rate_limits.user_qpm
       key            = "user"
       renewal_period = "minute"
       tokens         = null
       principal      = null
     }],
-    [for g in try(local._gateway_defaults.rate_limits.user_group_limits, []) : {
+    [for g in try(local.gateway_defaults.rate_limits.user_group_limits, []) : {
       calls          = g.qpm
       key            = "user_group"
       renewal_period = "minute"
@@ -74,15 +76,15 @@ locals {
 
   effective_rate_limits = length(var.rate_limits) > 0 ? var.rate_limits : local.default_rate_limits
 
-  _yaml_guardrails = try(local._model_defaults.gateway_defaults.guardrails, null)
-  default_guardrails = local._yaml_guardrails == null ? null : {
+  yaml_guardrails = try(local.model_defaults.gateway_defaults.guardrails, null)
+  default_guardrails = local.yaml_guardrails == null ? null : {
     input = {
-      safety       = try(local._yaml_guardrails.input_safety, false)
-      pii_behavior = try(local._yaml_guardrails.input_pii_behavior, null)
+      safety       = try(local.yaml_guardrails.input_safety, false)
+      pii_behavior = try(local.yaml_guardrails.input_pii_behavior, null)
     }
     output = {
-      safety       = try(local._yaml_guardrails.output_safety, false)
-      pii_behavior = try(local._yaml_guardrails.output_pii_behavior, null)
+      safety       = try(local.yaml_guardrails.output_safety, false)
+      pii_behavior = try(local.yaml_guardrails.output_pii_behavior, null)
     }
   }
 
@@ -90,8 +92,8 @@ locals {
 
   # Foundation Model API governance is fully YAML-driven. Surface the lists
   # to ops scripts and outputs only.
-  governed_foundation_endpoints = local._model_defaults.foundation_endpoints
-  disabled_foundation_models    = toset(local._model_defaults.disabled_foundation_models)
+  governed_foundation_endpoints = local.model_defaults.foundation_endpoints
+  disabled_foundation_models    = toset(local.model_defaults.disabled_foundation_models)
 
   # Sanitize the workspace prefix to alphanumerics + underscores so it's a
   # valid Unity Catalog table-name component.

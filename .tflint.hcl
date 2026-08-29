@@ -1,4 +1,9 @@
-# Terraform's own minimum severity is `error`; bump to warning if you want noisier output.
+# Every rule here is ENFORCED: CI runs tflint with no minimum-failure-severity
+# override, so notices (missing descriptions, naming) fail the build the same
+# as errors. Run locally with:
+#   tflint --init --config "$(pwd)/.tflint.hcl"
+#   tflint --recursive --config "$(pwd)/.tflint.hcl"
+# (--config must be an absolute path so recursive mode applies it everywhere.)
 plugin "terraform" {
   enabled = true
   preset  = "recommended"

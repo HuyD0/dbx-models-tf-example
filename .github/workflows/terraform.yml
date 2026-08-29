@@ -4,20 +4,26 @@ on:
   pull_request:
     paths:
       - "**.tf"
+      - "**.tftest.hcl"
       - "**.tfvars.example"
+      - "**/.terraform.lock.hcl"
       - "**/model_defaults.yaml"
       - "**/model_defaults.schema.json"
       - "**/budget_defaults.yaml"
       - "**/budget_defaults.schema.json"
+      - ".tflint.hcl"
       - ".github/workflows/terraform.yml"
   push:
     branches: [main]
     paths:
       - "**.tf"
+      - "**.tftest.hcl"
+      - "**/.terraform.lock.hcl"
       - "**/model_defaults.yaml"
       - "**/model_defaults.schema.json"
       - "**/budget_defaults.yaml"
       - "**/budget_defaults.schema.json"
+      - ".tflint.hcl"
       - ".github/workflows/terraform.yml"
 
 permissions:
@@ -61,27 +67,78 @@ jobs:
       # -backend=false: validate/lint/scan need providers and modules, not
       # remote state — so this job runs without any Azure credentials and
       # stays green even when cloud auth is broken. Only `plan` logs in.
+      # -lockfile=readonly: the committed .terraform.lock.hcl is authoritative;
+      # CI must fail if it would need to change, never rewrite it silently.
       - name: terraform init (no backend)
         working-directory: environments/${{ matrix.env }}
-        run: terraform init -backend=false -input=false
+        run: terraform init -backend=false -input=false -lockfile=readonly
 
       - name: terraform validate
         working-directory: environments/${{ matrix.env }}
         run: terraform validate -no-color
 
+      # Pinned version + the root config applied to every directory. No
+      # --minimum-failure-severity: ANY finding fails, so the documented-
+      # variables/outputs and naming rules in .tflint.hcl are actually
+      # enforced, not decoration.
       - name: tflint
         uses: terraform-linters/setup-tflint@v4
         with:
-          tflint_version: latest
-      - run: tflint --recursive --minimum-failure-severity=error
+          tflint_version: v0.64.0
+      # GITHUB_TOKEN avoids the unauthenticated GitHub API rate limit when
+      # --init downloads the azurerm ruleset plugin on shared runners.
+      - env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          tflint --init --config "$GITHUB_WORKSPACE/.tflint.hcl"
+          tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl"
 
+      # Pinned tag, not @master: a mutable ref lets the scanner change under
+      # us between runs.
       - name: trivy (HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: config
           severity: HIGH,CRITICAL
           exit-code: "1"
           ignore-unfixed: true
+
+  # Unit tests for the model-serving module: variable validations and
+  # allowlist preconditions, run against mocked providers (no cloud
+  # credentials, no state). See modules/model-serving/tests/.
+  module-tests:
+    name: module tests (model-serving)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: terraform test
+        working-directory: modules/model-serving
+        run: |
+          terraform init -backend=false -input=false -lockfile=readonly
+          terraform test -no-color
+
+  # The examples are compile-checked so they can never drift from the
+  # module interfaces the way hand-written docs can.
+  examples:
+    name: validate examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: terraform validate (examples/single-workspace)
+        working-directory: examples/single-workspace
+        run: |
+          terraform init -backend=false -input=false -lockfile=readonly
+          terraform validate -no-color
 
   # Requires working Azure OIDC: the sp-terraform-databricks app
   # registration must carry federated identity credentials for this repo
@@ -119,7 +176,7 @@ jobs:
           ARM_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
           ARM_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        run: terraform init -input=false
+        run: terraform init -input=false -lockfile=readonly
 
       - name: terraform plan
         working-directory: environments/${{ matrix.env }}

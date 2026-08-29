@@ -1,5 +1,5 @@
 output "workspace_url" {
-  description = "Workspace URL with https:// prefix (required for external model chaining)"
+  description = "Workspace URL with https:// prefix (consumed by the AI-gateway reconciler and health-check scripts, and re-exported by workspace-stack)"
   value       = "https://${azurerm_databricks_workspace.this.workspace_url}"
 }
 

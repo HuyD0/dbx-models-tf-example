@@ -60,7 +60,7 @@ The deployment supports three goals:
 ```
 bootstrap/                 # One-time remote state backend provisioning
 environments/
-  account/                 # Account-level: metastore, AAD groups, budgets + budget policies
+  account/                 # Account-level: metastore, account groups, deployment SP, budgets + budget policies
     budget_defaults.yaml       # Budgets + budget (usage) policies — cost governance source of truth
     budget_defaults.schema.json # JSON Schema — validated by pre-commit and CI
   dbx-dev/                 # Dev workspace — owns `main` catalog + model serving
@@ -73,6 +73,8 @@ modules/
     model_defaults.yaml        # Approved model allowlists + endpoint catalog + gateway_defaults policy
     model_defaults.schema.json # JSON Schema — validated by pre-commit and CI
   workspace-stack/         # Composes networking + workspace + UC + model-serving
+examples/
+  single-workspace/        # Compile-checked usage example (terraform validate in CI)
 docs/                      # Architecture, AI gateway, budgets, NIST mapping, operations
 ```
 
@@ -168,17 +170,27 @@ policy-ID handoff between environments, and import runbooks.
 Any Databricks account-level group listed in `consumer_groups` on the
 `dbx-dev` workspace is automatically granted:
 
-- **`CAN_QUERY`** on every model serving endpoint
-- **`EXECUTE`** on every foundation model served entity
+- workspace **USER** access (`databricks_mws_permission_assignment`)
+- **`CAN_QUERY`** on every **Terraform-managed** serving endpoint — the
+  external endpoints and the fallback router — via one
+  `databricks_permissions` resource per endpoint. Groups listed in
+  `model_serving_admin_groups` get **`CAN_MANAGE`** instead.
 
 Add a new consumer group by appending to the list and re-applying.
+
+The pre-provisioned `databricks-*` foundation endpoints are **not**
+covered by these ACLs — Terraform cannot manage endpoints under the
+reserved prefix, so access to them is constrained only by the rate
+limits the reconciler applies (`calls = 0` for blocked models), not by
+per-group grants.
 
 ### Deploying a workspace
 
 ```bash
 cd environments/dbx-dev        # or environments/dbx-uat
 cp ../../terraform.tfvars.example terraform.tfvars
-# fill in subscription_id, databricks_account_id, metastore_id, ai_foundry_name
+# add subscription_id, databricks_account_id, metastore_id,
+# deployment_sp_client_id — and set ai_foundry_name for serving workspaces
 terraform init
 terraform plan -out=tfplan
 terraform apply tfplan
@@ -192,14 +204,16 @@ independent of each other and can apply in any order.
 
 - **Remote state backend** — Azure Storage Account with blob versioning (`bootstrap/`)
 - **Resource group** — dedicated RG for all Databricks resources
-- **Networking** — VNet (10.179.0.0/20) with public/private subnets, NSGs with
+- **Networking** — VNet (default `10.192.0.0/20` in dev, `10.193.0.0/20` in
+  uat) with public/private subnets, NSGs with
   Databricks delegations, optional Secure Cluster Connectivity (no public IP)
 - **Databricks workspace** — Premium SKU, infrastructure encryption, Access
   Connector with system-assigned MSI for Unity Catalog
 - **Unity Catalog** — ADLS Gen2 (HNS, GRS, TLS 1.2), metastore assignment,
   storage credential, external location, `main` catalog, and a
   `model_serving_logs` schema; Access Connector MSI granted
-  `Storage Blob Data Contributor` and `Storage Account Contributor`
+  `Storage Blob Data Contributor` only (the broader
+  `Storage Account Contributor` role was removed for least privilege)
 - **Model Serving** (uses `databricks_model_serving` with inline `ai_gateway {}` blocks — the older embedded pattern, not the standalone Databricks AI Gateway product) —
   - External endpoints to Azure AI Foundry: `azure-gpt-4o`,
     `azure-gpt-5-mini`, `azure-gpt-5-4`, `azure-text-embedding-ada-002`
@@ -229,7 +243,12 @@ See [`docs/architecture.md`](docs/architecture.md) for the request flow.
 
 - [Terraform](https://developer.hashicorp.com/terraform/downloads) >= 1.9
 - [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) authenticated (`az login`)
-- [pre-commit](https://pre-commit.com/) with `pip install check-jsonschema yamllint` for local validation
+- [pre-commit](https://pre-commit.com/) for local validation (fmt, validate,
+  tflint, trivy, governance-YAML schema checks, secret scanning — hooks
+  install their own dependencies)
+- `az`, `yq`, `jq`, and `curl` on PATH — required by
+  `scripts/apply-ai-gateway.sh`, which runs on every apply of a
+  serving-enabled workspace
 - An existing Azure AI Foundry (Cognitive Services) account with the
   desired model deployments
 - A Databricks account ID (UUID) with admin access
@@ -252,7 +271,8 @@ METASTORE_ID=$(terraform output -raw metastore_id)
 #    does not matter)
 cd ../environments/dbx-dev
 cp ../../terraform.tfvars.example terraform.tfvars
-# fill in subscription_id, databricks_account_id, metastore_id, ai_foundry_name
+# add subscription_id, databricks_account_id, metastore_id,
+# deployment_sp_client_id — and set ai_foundry_name for serving workspaces
 terraform init
 terraform plan -out=tfplan -var="metastore_id=$METASTORE_ID"
 terraform apply tfplan
@@ -262,12 +282,15 @@ The Databricks provider's `host` is derived from the workspace module
 output, so a single `terraform apply` provisions the workspace, Unity
 Catalog, and model serving end-to-end — no two-step deploy required.
 
-Sensitive variables (`databricks_account_id`, `subscription_id`) should be
-supplied via environment variables in CI:
+Account and subscription identifiers are supplied via environment
+variables in CI rather than committed tfvars (`databricks_account_id` is
+additionally marked `sensitive`):
 
 ```bash
 export TF_VAR_databricks_account_id=...
 export TF_VAR_subscription_id=...
+export TF_VAR_metastore_id=...
+export TF_VAR_deployment_sp_client_id=...
 ```
 
 ## Adding or changing models
@@ -278,9 +301,10 @@ The active model catalog and guardrails live in one file:
 modules/model-serving/model_defaults.yaml
 ```
 
-The file has five sections: `allowed_external_models`,
+The file has six sections: `allowed_external_models`,
 `allowed_foundation_entities`, `external_endpoints`,
-`foundation_endpoints`, and `disabled_foundation_models`.
+`foundation_endpoints`, `disabled_foundation_models`, and
+`gateway_defaults` (the default rate limits + guardrails).
 
 **Rule: add the model to the allowlist before adding it as an endpoint.**
 Terraform enforces this with `lifecycle { precondition }` on external
@@ -296,16 +320,32 @@ repo handles them through three layers, all driven by
 
 1. **`foundation_endpoints`** in the YAML lists the approved endpoints and
    the inference-table prefix for each.
-2. **`disabled_foundation_models`** lists every other `databricks-*`
-   endpoint that must be locked down (rate limit set to **0 calls/min**, so
+2. **`disabled_foundation_models`** lists the other known `databricks-*`
+   endpoints, which are locked down (rate limit set to **0 calls/min**, so
    the API returns HTTP 429 on every attempt).
 3. **`scripts/apply-ai-gateway.sh`** is the reconciler. It reads the YAML
-   and `PUT`s the desired AI-gateway config on each endpoint via the
-   Databricks REST API. The script runs automatically on every
-   `terraform apply` via the `terraform_data.ai_gateway_reconciler`
-   resource, which is keyed on the YAML file hash + workspace URL +
-   table prefix/catalog/schema — so any change to the YAML triggers a
-   re-reconcile on the next apply.
+   and `PUT`s the desired AI-gateway config on each endpoint via
+   `PUT /api/2.0/serving-endpoints/{name}/ai-gateway`. The script runs
+   automatically on every `terraform apply` via the
+   `terraform_data.ai_gateway_reconciler` resource in
+   `modules/workspace-stack/main.tf` (disable with the workspace-stack
+   variable `ai_gateway_reconcile_on_apply`), which is keyed on the YAML
+   file hash + workspace URL + table prefix/catalog/schema — so any
+   change to the YAML triggers a re-reconcile on the next apply.
+
+**This deny-list is fail-open.** `disabled_foundation_models` is a
+blocklist, not an allowlist: when Databricks rolls out a new
+pre-provisioned `databricks-*` endpoint, it is fully callable until
+someone adds it to the YAML and the reconciler re-runs — and the
+reconciler only re-asserts the YAML's state on `terraform apply` (or a
+manual run); it does not discover new endpoints or catch drift between
+applies. `allowed_foundation_entities` in the same YAML is **audit
+documentation, not enforcement**: it is surfaced as the model-serving
+module's `allowed_foundation_entities` output for ops tooling, but no
+resource or script enforces it as an allowlist. Review the blocklist
+whenever Databricks announces new pay-per-token models. (Within a run,
+enforcement failures are not silent: every endpoint is attempted, and
+any failed `PUT` fails the script — and therefore the apply.)
 
 To run the reconciler manually (e.g. after an out-of-band UI change):
 
@@ -316,33 +356,44 @@ scripts/apply-ai-gateway.sh --dry-run dbx-dev # print payloads only
 ```
 
 The YAML is validated by:
-- `check-jsonschema` pre-commit hook (runs on every commit, uses
-  `modules/model-serving/model_defaults.schema.json`)
-- `yamllint` pre-commit hook (style and structure)
-- A dedicated `schema-check` CI job that runs before `terraform validate`
+- `check-jsonschema` pre-commit hooks (against
+  `modules/model-serving/model_defaults.schema.json` and
+  `environments/account/budget_defaults.schema.json`)
+- a schema-validation step at the start of the CI `validate` job, which
+  runs before `terraform fmt` / `terraform validate`
 
 See [`docs/model-serving.md § Adding an endpoint`](docs/model-serving.md)
 for the step-by-step workflow.
 
 ## Variables (workspace environments)
 
+Each workspace environment (`dbx-dev`, `dbx-uat`) declares its own copy of
+these variables; where defaults differ per environment both are shown as
+dev / uat.
+
 | Name | Description | Default |
 |------|-------------|---------|
+| `team` | Team identifier — becomes tags and the default inference-table prefix | `dbx-dev` / `dbx-uat` |
 | `location` | Azure region | `eastus2` |
-| `resource_group_name` | Resource group name | — |
-| `workspace_name` | Databricks workspace name | — |
+| `resource_group_name` | Resource group name | `rg-databricks-dbx-dev` / `rg-databricks-dbx-uat` |
+| `workspace_name` | Databricks workspace name | `dbx-dev` / `dbx-uat` |
 | `sku` | Workspace SKU (`standard`, `premium`, `trial`) | `premium` |
 | `tags` | Resource tags applied to all resources | `{}` |
-| `vnet_cidr` | VNet address space for VNet injection | `10.192.0.0/20` |
+| `vnet_cidr` | VNet address space for VNet injection | `10.192.0.0/20` / `10.193.0.0/20` |
 | `managed_resource_group_name` | Override the Databricks-managed RG name (null = auto) | `null` |
 | `no_public_ip` | Enable Secure Cluster Connectivity | `true` |
 | `public_network_access_enabled` | Allow public network access | `true` |
 | `infrastructure_encryption_enabled` | Secondary encryption layer on DBFS | `true` |
-| `ai_foundry_name` | Azure AI Foundry account name | — |
-| `ai_foundry_resource_group` | Resource group of the AI Foundry account | — |
+| `ai_foundry_name` | Azure AI Foundry account name | `aif-huy-dev` / `null` |
+| `ai_foundry_resource_group` | Resource group of the AI Foundry account | `rg-aifoundry-dev` / `null` |
 | `openai_api_version` | Azure OpenAI API version | `2024-12-01-preview` |
-| `inference_table_catalog` | UC catalog for inference tables | `main` |
+| `inference_table_catalog` | UC catalog for inference tables | `main` / `uat` |
 | `inference_table_schema` | UC schema for inference tables | `model_serving_logs` |
+| `create_main_catalog` | Create the `main` UC catalog (exactly one workspace may own it) | `true` / `false` |
+| `enable_model_serving` | Whether this workspace owns model serving endpoints | `true` / `false` |
+| `workspace_groups` | Account-level groups granted workspace USER + scoped write privileges on the owned catalogs | `[]` |
+| `consumer_groups` | Account-level groups granted workspace USER + endpoint `CAN_QUERY` | `[]` |
+| `model_serving_admin_groups` | Account-level groups granted `CAN_MANAGE` on every managed endpoint | `[]` |
 | `model_serving_fallback_enabled` | Enable AI gateway traffic fallback | `false` |
 | `model_serving_rate_limits` | Rate limit rules applied to every endpoint (`[]` = use `gateway_defaults` from `model_defaults.yaml`) | `[]` |
 | `model_serving_guardrails` | AI Gateway guardrails override (`null` = use `gateway_defaults`) | `null` |
@@ -350,25 +401,33 @@ for the step-by-step workflow.
 | `model_serving_endpoint_permissions_enabled` | Manage endpoint ACLs (set `false` where the inference-endpoint ACL feature is unavailable) | `true` |
 | `model_serving_external_endpoints` | Full override of the external endpoint catalog (`null` = load from `model_defaults.yaml`) | `null` |
 | `model_serving_additional_external_endpoints` | Extra external endpoints merged on top of the active set | `{}` |
-| `ai_gateway_reconcile_on_apply` | Run `scripts/apply-ai-gateway.sh` on every `terraform apply` to enforce YAML-driven rate limits + inference tables on pre-provisioned `databricks-*` endpoints | `true` |
+| `contributor_group_object_id` | AAD group object ID granted Contributor on the resource group | `null` |
 | `databricks_account_id` | Databricks account UUID (sensitive) | — |
 | `subscription_id` | Azure subscription ID | — |
 | `metastore_id` | UC metastore UUID from `environments/account/` | — |
+| `deployment_sp_client_id` | Client ID of the deployment SP (`sp-terraform-databricks`), granted workspace ADMIN at creation | — |
+| `databricks_auth_type` | Databricks provider auth: `azure-client-secret`, `github-oidc-azure` (CI), or `azure-cli` | `azure-client-secret` |
 | `uc_storage_account_name` | UC storage account name (auto-derived if null) | `null` |
-| `metastore_force_destroy` | Allow destroy of a non-empty metastore (keep `false` in prod) | `false` |
-| `write_access_group` | AD/Databricks group granted write access on UC | `null` |
+| `create_inference_catalog` | (uat only) Override auto-creation of the inference catalog | `null` |
+
+The workspace-stack module additionally exposes
+`ai_gateway_reconcile_on_apply` (default `true`) to toggle the
+foundation-endpoint reconciler run on apply; the environment roots use
+the default rather than exposing it as a root variable.
 
 See [`docs/model-serving.md`](docs/model-serving.md) for examples of
 overriding endpoint maps, tuning rate limits, and operating the fallback
 router.
 
-## Outputs
+## Outputs (workspace environments)
 
 | Name | Description |
 |------|-------------|
 | `workspace_url` | Databricks workspace URL |
 | `workspace_id` | Azure resource ID of the workspace |
 | `workspace_resource_id` | Numeric Databricks workspace ID |
-| `managed_resource_group_id` | Managed resource group created by Databricks |
 | `access_connector_id` | Access Connector resource ID (for Unity Catalog) |
-| `access_connector_principal_id` | Access Connector managed identity principal ID |
+| `uc_storage_account_name` | Storage account backing Unity Catalog |
+| `metastore_id` | UC metastore ID assigned to this workspace |
+| `inference_catalog_name` | Catalog receiving model-serving inference tables |
+| `model_serving_endpoints` | Names of the Terraform-managed serving endpoints (empty when serving is disabled) |
