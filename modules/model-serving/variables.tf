@@ -167,3 +167,54 @@ variable "guardrails" {
 # and is applied via scripts/apply-ai-gateway.sh, not via Terraform variables.
 # Edit the YAML to change the policy; the workspace-stack terraform_data
 # reconciler re-asserts the desired state on every `terraform apply`.
+
+variable "agent_waste_monitors" {
+  description = "Opt-in scheduled Databricks SQL alerts (databricks_alert_v2) that surface silent agent waste: retry loops (error-loops), elevated per-endpoint failure share (error-rate), callers hammering deny-listed models (blocked-model-attempts) and, with payload_alerts_enabled, sessions that keep feeding tool-call errors back to the model (tool-error-loops). Queries are generated from the endpoint catalog and run against system.serving.endpoint_usage and the inference tables — see docs/agent-spend-waste.md. Null = nothing created. warehouse_id: SQL warehouse the alerts evaluate on. notify_emails: recipients. parent_path: workspace folder for the alerts. schedule_cron/timezone_id: Quartz schedule. Threshold fields are per alert. tool_error_pattern: RLIKE regex marking a tool-role message as an error. workspace_id: numeric workspace ID used to scope the system-table queries (workspace-stack fills it in)."
+  type = object({
+    warehouse_id                 = string
+    notify_emails                = list(string)
+    parent_path                  = optional(string, "/Shared/llm-gateway-monitors")
+    schedule_cron                = optional(string, "0 0 * * * ?")
+    timezone_id                  = optional(string, "UTC")
+    error_loop_failed_calls      = optional(number, 10)
+    error_rate_pct               = optional(number, 20)
+    error_rate_min_calls         = optional(number, 20)
+    blocked_model_attempts       = optional(number, 25)
+    payload_alerts_enabled       = optional(bool, false)
+    tool_error_turns_per_session = optional(number, 3)
+    tool_error_pattern           = optional(string, "(?i)(error|exception|traceback|invalid|not found)")
+    workspace_id                 = optional(string)
+  })
+  default  = null
+  nullable = true
+
+  validation {
+    condition     = var.agent_waste_monitors == null || try(length(var.agent_waste_monitors.notify_emails) > 0, false)
+    error_message = "agent_waste_monitors.notify_emails must list at least one recipient — an alert nobody receives is exactly the silent failure these monitors exist to prevent."
+  }
+
+  validation {
+    condition     = var.agent_waste_monitors == null || try(alltrue([for e in var.agent_waste_monitors.notify_emails : can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", e))]), false)
+    error_message = "agent_waste_monitors.notify_emails entries must be email addresses."
+  }
+
+  validation {
+    condition     = var.agent_waste_monitors == null || try(length(var.agent_waste_monitors.warehouse_id) > 0, false)
+    error_message = "agent_waste_monitors.warehouse_id must be the ID of an existing SQL warehouse (Compute → SQL warehouses → Connection details)."
+  }
+
+  validation {
+    condition     = var.agent_waste_monitors == null || can(regex("^/", var.agent_waste_monitors.parent_path))
+    error_message = "agent_waste_monitors.parent_path must be an absolute workspace path, e.g. /Shared/llm-gateway-monitors."
+  }
+
+  validation {
+    condition     = var.agent_waste_monitors == null || try(length(split(" ", var.agent_waste_monitors.schedule_cron)) >= 6, false)
+    error_message = "agent_waste_monitors.schedule_cron must be a Quartz cron expression with 6 or 7 fields, e.g. '0 0 * * * ?' (hourly)."
+  }
+
+  validation {
+    condition     = var.agent_waste_monitors == null || try(alltrue([for v in [var.agent_waste_monitors.error_loop_failed_calls, var.agent_waste_monitors.error_rate_min_calls, var.agent_waste_monitors.blocked_model_attempts, var.agent_waste_monitors.tool_error_turns_per_session] : v >= 1]) && var.agent_waste_monitors.error_rate_pct > 0 && var.agent_waste_monitors.error_rate_pct <= 100, false)
+    error_message = "agent_waste_monitors thresholds must be >= 1 (counts) and error_rate_pct must be within (0, 100]."
+  }
+}

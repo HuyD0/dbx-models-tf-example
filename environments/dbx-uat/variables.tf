@@ -258,3 +258,23 @@ variable "databricks_auth_type" {
     error_message = "databricks_auth_type must be one of: azure-client-secret, github-oidc-azure, azure-cli."
   }
 }
+
+variable "model_serving_agent_waste_monitors" {
+  description = "Opt-in scheduled SQL alerts for silent agent waste on this workspace's endpoints (retry loops, error rates, blocked-model hammering, tool-error loops) — see docs/agent-spend-waste.md. Null = none. Needs a SQL warehouse ID and at least one recipient email."
+  type = object({
+    warehouse_id                 = string
+    notify_emails                = list(string)
+    parent_path                  = optional(string, "/Shared/llm-gateway-monitors")
+    schedule_cron                = optional(string, "0 0 * * * ?")
+    timezone_id                  = optional(string, "UTC")
+    error_loop_failed_calls      = optional(number, 10)
+    error_rate_pct               = optional(number, 20)
+    error_rate_min_calls         = optional(number, 20)
+    blocked_model_attempts       = optional(number, 25)
+    payload_alerts_enabled       = optional(bool, false)
+    tool_error_turns_per_session = optional(number, 3)
+    tool_error_pattern           = optional(string, "(?i)(error|exception|traceback|invalid|not found)")
+  })
+  default  = null
+  nullable = true
+}

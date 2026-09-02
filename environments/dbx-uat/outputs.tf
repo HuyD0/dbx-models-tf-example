@@ -37,3 +37,8 @@ output "model_serving_endpoints" {
   description = "Names of all provisioned model serving endpoints"
   value       = module.stack.model_serving_endpoints
 }
+
+output "agent_waste_alert_names" {
+  description = "Scheduled agent-waste SQL alerts created for this workspace (empty when disabled)"
+  value       = module.stack.agent_waste_alert_names
+}

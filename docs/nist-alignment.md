@@ -22,10 +22,10 @@ Items marked **operational** require a runbook or process outside the repo.
 | GOVERN | GOVERN-4.1 (workforce accountability) | The per-workspace `<workspace>-model-serving` SP (e.g. `dbx-dev-model-serving`) is the only identity allowed to call Azure OpenAI; the calling user is recorded per request in the inference tables (`requester`). |
 | **MAP** | MAP-2.1 (system inventory) | `modules/model-serving/model_defaults.yaml` is the single source of truth: allowlisted external models, the external endpoints, the governed foundation endpoints, and the deny-list. `terraform state list` inventories the Terraform-managed external endpoints; the pre-provisioned `databricks-*` endpoints live outside state and are inventoried in the YAML. |
 | MAP | MAP-3.4 (third-party components) | Models are explicitly enumerated as either *external* (Azure AI Foundry / Anthropic) or *foundation* (Databricks `system.ai.*`) in `model_defaults.yaml` — provenance is visible in code. |
-| **MEASURE** | MEASURE-2.1 / 2.6 (performance & robustness) | `system.serving.endpoint_usage` captures latency and status per call; inference tables capture full prompts/completions for offline evaluation. |
+| **MEASURE** | MEASURE-2.1 / 2.6 (performance & robustness) | `system.serving.endpoint_usage` captures status and token counts per call; inference tables capture full prompts/completions (including tool calls and tool results) for offline evaluation. Optional `agent_waste_monitors` alerts (`modules/model-serving/monitoring.tf`) evaluate error loops, error rate and tool-error loops on a schedule — see `docs/agent-spend-waste.md`. |
 | MEASURE | MEASURE-2.7 (security testing) | Rate limits default from `gateway_defaults` in `model_defaults.yaml` and can be overridden per workspace via `model_serving_rate_limits`; fallback routing is toggled via `model_serving_fallback_enabled`. |
 | **MANAGE** | MANAGE-2.2 (incident response) | Inference table + endpoint usage data is queryable in SQL. Blocking a model is one edit to `disabled_foundation_models` plus an apply — the reconciler PUTs `rate_limit = 0` and fails the apply if any endpoint could not be reconciled, so governance drift is never silent. |
-| MANAGE | MANAGE-4.1 (post-deployment monitoring) | UC inference tables are managed Delta tables — point Databricks SQL alerts or Lakehouse Monitoring at them. `databricks_budget` alerts (`environments/account/budgets.tf`) watch monthly LLM spend, optionally with a `BLOCK_USAGE` brake on AI Gateway budgets. |
+| MANAGE | MANAGE-4.1 (post-deployment monitoring) | UC inference tables are managed Delta tables — point Databricks SQL alerts or Lakehouse Monitoring at them; `model_serving_agent_waste_monitors` provisions a baseline set (retry loops, error rate, blocked-model attempts, tool-error loops) as `databricks_alert_v2` resources. `databricks_budget` alerts (`environments/account/budgets.tf`) watch monthly LLM spend, optionally with a `BLOCK_USAGE` brake on AI Gateway budgets. |
 
 ## NIST SP 800-53 Rev. 5
 
@@ -47,6 +47,7 @@ Items marked **operational** require a runbook or process outside the repo.
 | SC | SC-12 Cryptographic Key Establishment | Workspace `infrastructure_encryption_enabled = true` adds a second encryption layer on DBFS. |
 | SC | SC-28 Protection of Information at Rest | ADLS Gen2 with HNS + GRS for UC storage; Databricks-managed encryption for control-plane data. |
 | **SI** | SI-4 System Monitoring | Inference tables + `endpoint_usage` enable real-time monitoring queries; rate limits provide automatic abuse protection. |
+| SI | SI-4 (cont.) Silent-failure detection | Attempts against deny-listed endpoints are still recorded (`usage_tracking_config` stays on at `calls = 0`), and the optional agent-waste alerts turn retry storms, elevated error rates and repeated tool-call errors into notifications instead of "usage growth" — see `docs/agent-spend-waste.md`. |
 | SI | SI-10 Information Input Validation | The gateway is the single chokepoint for input controls. AI Gateway guardrails (safety filters, PII behavior) are wired through `gateway_defaults.guardrails` in `model_defaults.yaml` and the `model_serving_guardrails` override, but ship disabled by default — see Gaps. |
 
 ## Gaps and operational follow-ups
@@ -83,6 +84,13 @@ controls:
   policy requires CMK.
 - **Private endpoints** (SC-7): consider Private Link for the workspace
   control plane and the Foundry account in regulated environments.
+- **Session attribution for agent traffic** (MEASURE-2.6, SI-4): the
+  gateway does not assign conversation/session IDs. Retry-loop and
+  repeat-rate analysis in `docs/agent-spend-waste.md` depends on callers
+  sending `usage_context.session_id` (and `app_id`) on every request;
+  unlabelled traffic is only attributable per principal. Enforce the
+  convention in agent SDK wrappers / code review — it cannot be enforced
+  at the gateway.
 - **Centralised log forwarding** (AU-6): forward `system.serving.*` and
   inference tables to your SIEM (Sentinel, Splunk, etc.).
 - **Content safety** (SI-10): the guardrail knobs exist in code but are off

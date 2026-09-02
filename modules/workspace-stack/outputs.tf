@@ -42,3 +42,8 @@ output "model_serving_endpoints" {
   description = "Names of the Terraform-managed model serving endpoints (empty when serving is disabled)."
   value       = var.enable_model_serving ? module.model_serving[0].endpoint_names : []
 }
+
+output "agent_waste_alert_names" {
+  description = "Display names of the scheduled agent-waste SQL alerts (empty when serving or monitors are disabled). See docs/agent-spend-waste.md."
+  value       = var.enable_model_serving ? module.model_serving[0].agent_waste_alert_names : []
+}

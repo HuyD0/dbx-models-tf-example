@@ -18,6 +18,11 @@ The AI-gateway layer of the platform. This module manages what Terraform
 - **Endpoint ACLs**: a single authoritative `databricks_permissions`
   resource per endpoint (multiple resources on one endpoint overwrite
   each other).
+- **Agent-waste alerts** (optional, `monitoring.tf`): `databricks_alert_v2`
+  resources generated from the endpoint catalog that page on retry
+  loops, elevated error rates, callers hammering deny-listed models and
+  (opt-in) sessions repeatedly feeding tool-call errors back to the
+  model. Set `agent_waste_monitors`; see `docs/agent-spend-waste.md`.
 - **Pre-provisioned `databricks-*` foundation endpoints** cannot be
   created or updated by Terraform (reserved prefix). They are governed
   out-of-band by `scripts/apply-ai-gateway.sh`, driven by the same
@@ -63,6 +68,8 @@ No modules.
 | [azuread_service_principal.model_serving](https://registry.terraform.io/providers/hashicorp/azuread/latest/docs/resources/service_principal) | resource |
 | [azuread_service_principal_password.model_serving](https://registry.terraform.io/providers/hashicorp/azuread/latest/docs/resources/service_principal_password) | resource |
 | [azurerm_role_assignment.databricks_oai_user](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/role_assignment) | resource |
+| [databricks_alert_v2.agent_waste](https://registry.terraform.io/providers/databricks/databricks/latest/docs/resources/alert_v2) | resource |
+| [databricks_directory.agent_waste_monitors](https://registry.terraform.io/providers/databricks/databricks/latest/docs/resources/directory) | resource |
 | [databricks_model_serving.endpoints](https://registry.terraform.io/providers/databricks/databricks/latest/docs/resources/model_serving) | resource |
 | [databricks_model_serving.gpt_chat_fallback](https://registry.terraform.io/providers/databricks/databricks/latest/docs/resources/model_serving) | resource |
 | [databricks_permissions.endpoints](https://registry.terraform.io/providers/databricks/databricks/latest/docs/resources/permissions) | resource |
@@ -77,6 +84,7 @@ No modules.
 | ---- | ----------- | ---- | ------- | :------: |
 | <a name="input_additional_external_endpoints"></a> [additional\_external\_endpoints](#input\_additional\_external\_endpoints) | Extra external endpoints to merge on top of the active set (defaults or var.external\_endpoints). Use this to add a new model without replacing the whole list. Same shape as external\_endpoints. | <pre>map(object({<br/>    model           = string<br/>    deployment_name = optional(string)<br/>    task            = string<br/>    table_prefix    = string<br/>    provider        = optional(string, "openai")<br/>    api_key_secret  = optional(string)<br/>  }))</pre> | `{}` | no |
 | <a name="input_admin_groups"></a> [admin\_groups](#input\_admin\_groups) | Account-level group display names that get CAN\_MANAGE on every model serving endpoint. Locks down who can create/update/delete endpoints. | `list(string)` | `[]` | no |
+| <a name="input_agent_waste_monitors"></a> [agent\_waste\_monitors](#input\_agent\_waste\_monitors) | Opt-in scheduled Databricks SQL alerts (databricks\_alert\_v2) that surface silent agent waste: retry loops (error-loops), elevated per-endpoint failure share (error-rate), callers hammering deny-listed models (blocked-model-attempts) and, with payload\_alerts\_enabled, sessions that keep feeding tool-call errors back to the model (tool-error-loops). Queries are generated from the endpoint catalog and run against system.serving.endpoint\_usage and the inference tables — see docs/agent-spend-waste.md. Null = nothing created. warehouse\_id: SQL warehouse the alerts evaluate on. notify\_emails: recipients. parent\_path: workspace folder for the alerts. schedule\_cron/timezone\_id: Quartz schedule. Threshold fields are per alert. tool\_error\_pattern: RLIKE regex marking a tool-role message as an error. workspace\_id: numeric workspace ID used to scope the system-table queries (workspace-stack fills it in). | <pre>object({<br/>    warehouse_id                 = string<br/>    notify_emails                = list(string)<br/>    parent_path                  = optional(string, "/Shared/llm-gateway-monitors")<br/>    schedule_cron                = optional(string, "0 0 * * * ?")<br/>    timezone_id                  = optional(string, "UTC")<br/>    error_loop_failed_calls      = optional(number, 10)<br/>    error_rate_pct               = optional(number, 20)<br/>    error_rate_min_calls         = optional(number, 20)<br/>    blocked_model_attempts       = optional(number, 25)<br/>    payload_alerts_enabled       = optional(bool, false)<br/>    tool_error_turns_per_session = optional(number, 3)<br/>    tool_error_pattern           = optional(string, "(?i)(error|exception|traceback|invalid|not found)")<br/>    workspace_id                 = optional(string)<br/>  })</pre> | `null` | no |
 | <a name="input_ai_foundry_name"></a> [ai\_foundry\_name](#input\_ai\_foundry\_name) | Name of the Azure AI Foundry (Cognitive Services) account | `string` | n/a | yes |
 | <a name="input_ai_foundry_resource_group"></a> [ai\_foundry\_resource\_group](#input\_ai\_foundry\_resource\_group) | Resource group containing the Azure AI Foundry account | `string` | n/a | yes |
 | <a name="input_budget_policy_id"></a> [budget\_policy\_id](#input\_budget\_policy\_id) | Databricks budget policy (serverless usage policy) ID attached to every serving endpoint for cost attribution — its custom tags are stamped onto system.billing.usage records. From: cd environments/account && terraform output budget\_policy\_ids. Null = no policy. NOTE: Databricks does not currently apply usage policies to endpoints serving external models — tag-filtered budgets remain the guaranteed attribution path for those; this attachment covers foundation/custom endpoints and is forward-looking for external ones. | `string` | `null` | no |
@@ -98,6 +106,7 @@ No modules.
 
 | Name | Description |
 | ---- | ----------- |
+| <a name="output_agent_waste_alert_names"></a> [agent\_waste\_alert\_names](#output\_agent\_waste\_alert\_names) | Display names of the scheduled agent-waste SQL alerts generated from var.agent\_waste\_monitors (empty when monitors are disabled). See docs/agent-spend-waste.md. |
 | <a name="output_allowed_foundation_entities"></a> [allowed\_foundation\_entities](#output\_allowed\_foundation\_entities) | Approved system.ai.* Foundation Model entity names from model\_defaults.yaml. Audit documentation surfaced for ops tooling — NOT an enforced allowlist: enforcement is the disabled\_foundation\_models deny-list applied by apply-ai-gateway.sh, which is fail-open for newly released endpoints. |
 | <a name="output_disabled_foundation_models"></a> [disabled\_foundation\_models](#output\_disabled\_foundation\_models) | Pre-provisioned `databricks-*` Foundation Model API endpoints blocked via apply-ai-gateway.sh (rate\_limit = 0). Defined in modules/model-serving/model\_defaults.yaml. |
 | <a name="output_endpoint_names"></a> [endpoint\_names](#output\_endpoint\_names) | Names of all provisioned model serving endpoints (external/Azure-OpenAI). |
