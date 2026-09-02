@@ -145,6 +145,13 @@ module "model_serving" {
   budget_policy_id              = var.model_serving_budget_policy_id
   databricks_tags               = local.databricks_tags
 
+  # Agent-waste alerts: scope the system-table queries to this workspace —
+  # endpoint names are not unique across workspaces in one account.
+  agent_waste_monitors = var.model_serving_agent_waste_monitors == null ? null : merge(
+    var.model_serving_agent_waste_monitors,
+    { workspace_id = tostring(module.workspace.workspace_resource_id) },
+  )
+
   providers = {
     databricks = databricks
   }

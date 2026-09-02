@@ -22,3 +22,8 @@ output "model_defaults_yaml_hash" {
   description = "MD5 hash of model_defaults.yaml — used by workspace-stack's terraform_data reconciler to retrigger apply-ai-gateway.sh when the governance config changes."
   value       = filemd5("${path.module}/model_defaults.yaml")
 }
+
+output "agent_waste_alert_names" {
+  description = "Display names of the scheduled agent-waste SQL alerts generated from var.agent_waste_monitors (empty when monitors are disabled). See docs/agent-spend-waste.md."
+  value       = sort([for a in databricks_alert_v2.agent_waste : a.display_name])
+}

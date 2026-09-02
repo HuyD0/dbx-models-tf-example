@@ -189,3 +189,128 @@ run "rejects_openai_endpoint_without_deployment_name" {
 
   expect_failures = [databricks_model_serving.endpoints]
 }
+
+# ── Agent-waste monitors (monitoring.tf) ────────────────────────────────────
+
+run "agent_waste_monitors_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(databricks_alert_v2.agent_waste) == 0 && length(databricks_directory.agent_waste_monitors) == 0
+    error_message = "No alerts or folder may be created while var.agent_waste_monitors is null."
+  }
+}
+
+run "agent_waste_monitors_generate_usage_alerts" {
+  command = plan
+
+  variables {
+    agent_waste_monitors = {
+      warehouse_id  = "abc123def456"
+      notify_emails = ["mlops-team@example.com"]
+      workspace_id  = "1234567890"
+    }
+  }
+
+  # Payload alert stays off unless explicitly enabled; the three
+  # system-table alerts are always generated (a deny-list exists in the YAML).
+  assert {
+    condition     = join(",", keys(databricks_alert_v2.agent_waste)) == "blocked-model-attempts,error-loops,error-rate"
+    error_message = "Expected exactly the error-loops, error-rate and blocked-model-attempts alerts by default."
+  }
+
+  # The SQL is generated from the endpoint catalog and scoped to the workspace.
+  assert {
+    condition = (
+      strcontains(databricks_alert_v2.agent_waste["error-loops"].query_text, "'azure-gpt-4o'")
+      && strcontains(databricks_alert_v2.agent_waste["error-loops"].query_text, "'databricks-claude-sonnet-4-6'")
+      && strcontains(databricks_alert_v2.agent_waste["error-loops"].query_text, "se.workspace_id = '1234567890'")
+    )
+    error_message = "error-loops SQL must cover managed + governed endpoints and carry the workspace filter."
+  }
+
+  # Deny-listed endpoints are watched by blocked-model-attempts only —
+  # their 429s must not pollute the error-loop / error-rate signals.
+  assert {
+    condition = (
+      strcontains(databricks_alert_v2.agent_waste["blocked-model-attempts"].query_text, "'databricks-claude-haiku-4-5'")
+      && !strcontains(databricks_alert_v2.agent_waste["error-loops"].query_text, "'databricks-claude-haiku-4-5'")
+      && !strcontains(databricks_alert_v2.agent_waste["error-rate"].query_text, "'databricks-claude-haiku-4-5'")
+    )
+    error_message = "Blocked endpoints must appear only in the blocked-model-attempts query."
+  }
+
+  assert {
+    condition = (
+      databricks_alert_v2.agent_waste["error-loops"].evaluation.source.name == "failed_calls"
+      && databricks_alert_v2.agent_waste["error-loops"].evaluation.threshold.value.double_value == 10
+      && databricks_alert_v2.agent_waste["error-rate"].evaluation.threshold.value.double_value == 20
+      && databricks_alert_v2.agent_waste["error-loops"].warehouse_id == "abc123def456"
+    )
+    error_message = "Alert evaluation must use the documented default thresholds and the supplied warehouse."
+  }
+}
+
+run "agent_waste_payload_alert_covers_every_chat_table" {
+  command = plan
+
+  variables {
+    inference_table_prefix = "team-a"
+    fallback_enabled       = true
+    agent_waste_monitors = {
+      warehouse_id                 = "abc123def456"
+      notify_emails                = ["mlops-team@example.com"]
+      payload_alerts_enabled       = true
+      tool_error_turns_per_session = 5
+    }
+  }
+
+  assert {
+    condition     = contains(keys(databricks_alert_v2.agent_waste), "tool-error-loops")
+    error_message = "payload_alerts_enabled = true must create the tool-error-loops alert."
+  }
+
+  # Every chat endpoint's payload table — external, fallback and governed
+  # foundation — is in the UNION; the embeddings table is not.
+  assert {
+    condition = (
+      strcontains(databricks_alert_v2.agent_waste["tool-error-loops"].query_text, "main.model_serving_logs.team_a_azure_gpt4o_payload")
+      && strcontains(databricks_alert_v2.agent_waste["tool-error-loops"].query_text, "main.model_serving_logs.team_a_azure_gpt_chat_fallback_payload")
+      && strcontains(databricks_alert_v2.agent_waste["tool-error-loops"].query_text, "main.model_serving_logs.team_a_databricks_claude_sonnet_4_6_payload")
+      && !strcontains(databricks_alert_v2.agent_waste["tool-error-loops"].query_text, "team_a_azure_embeddings_payload")
+    )
+    error_message = "tool-error-loops SQL must union every chat payload table (with the sanitized workspace prefix) and skip embeddings."
+  }
+
+  assert {
+    condition     = databricks_alert_v2.agent_waste["tool-error-loops"].evaluation.threshold.value.double_value == 5
+    error_message = "tool_error_turns_per_session must drive the tool-error-loops threshold."
+  }
+}
+
+run "rejects_agent_waste_monitors_without_recipients" {
+  command = plan
+
+  variables {
+    agent_waste_monitors = {
+      warehouse_id  = "abc123def456"
+      notify_emails = []
+    }
+  }
+
+  expect_failures = [var.agent_waste_monitors]
+}
+
+run "rejects_agent_waste_monitors_with_bad_cron" {
+  command = plan
+
+  variables {
+    agent_waste_monitors = {
+      warehouse_id  = "abc123def456"
+      notify_emails = ["mlops-team@example.com"]
+      schedule_cron = "0 * * * *" # 5-field crontab syntax, not Quartz
+    }
+  }
+
+  expect_failures = [var.agent_waste_monitors]
+}

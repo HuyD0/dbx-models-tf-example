@@ -25,3 +25,14 @@ tags = {
 # Budget (serverless usage) policy for endpoint cost attribution — from:
 #   cd environments/account && terraform output budget_policy_ids
 # model_serving_budget_policy_id = "00000000-0000-0000-0000-000000000000"
+
+# Scheduled SQL alerts that surface silent agent waste — retry loops,
+# elevated error rates, callers hammering blocked models and (opt-in)
+# sessions repeatedly feeding tool errors back to the model. See
+# docs/agent-spend-waste.md. Needs a SQL warehouse ID; turn on
+# payload_alerts_enabled only after the inference tables exist (first traffic).
+# model_serving_agent_waste_monitors = {
+#   warehouse_id           = "1234567890abcdef"
+#   notify_emails          = ["mlops-team@example.com"]
+#   payload_alerts_enabled = false
+# }

@@ -52,6 +52,7 @@ The deployment supports three goals:
 |---|---|
 | [`docs/model-serving.md`](docs/model-serving.md) | **Primary doc** — endpoint catalog, inline `ai_gateway` config (usage tracking, inference tables, rate limits), logging & usage SQL, fallback routing in depth, identity & secret rotation |
 | [`docs/budgets.md`](docs/budgets.md) | Cost governance — account-level budgets (LLM spend alerts + optional usage blocking) and budget/serverless-usage policies for chargeback |
+| [`docs/agent-spend-waste.md`](docs/agent-spend-waste.md) | Finding wasted agent spend — silent tool failures and retry loops: the `usage_context` session convention, analysis SQL over `endpoint_usage` + inference tables, the scheduled `agent_waste_monitors` alerts, and the tool-fix checklist |
 | [`docs/architecture.md`](docs/architecture.md) | Component diagram, request flow, why an SP is used for Azure OpenAI |
 | [`docs/nist-alignment.md`](docs/nist-alignment.md) | NIST AI RMF + SP 800-53 control mapping with gaps |
 
@@ -229,6 +230,11 @@ independent of each other and can apply in any order.
     primary/secondary served entities
   - All endpoints have usage tracking on; governed endpoints additionally
     write full prompt/completion payloads to Unity Catalog inference tables
+  - Optional **agent-waste alerts** (`model_serving_agent_waste_monitors`):
+    scheduled Databricks SQL alerts generated from the endpoint catalog that
+    page on retry loops, elevated error rates, callers hammering blocked
+    models, and sessions repeatedly feeding tool errors back to the model —
+    see [`docs/agent-spend-waste.md`](docs/agent-spend-waste.md)
   - **Approved-model allowlists** enforced via `lifecycle { precondition }`
     on external endpoints — any model or entity not in `model_defaults.yaml`
     fails the plan before any API call is made
@@ -398,6 +404,7 @@ dev / uat.
 | `model_serving_rate_limits` | Rate limit rules applied to every endpoint (`[]` = use `gateway_defaults` from `model_defaults.yaml`) | `[]` |
 | `model_serving_guardrails` | AI Gateway guardrails override (`null` = use `gateway_defaults`) | `null` |
 | `model_serving_budget_policy_id` | Budget (serverless usage) policy attached to every endpoint — from `environments/account` outputs | `null` |
+| `model_serving_agent_waste_monitors` | Scheduled SQL alerts for silent agent waste (retry loops, error rates, blocked-model hammering, tool-error loops) — needs a SQL warehouse ID + recipients; see [`docs/agent-spend-waste.md`](docs/agent-spend-waste.md) | `null` |
 | `model_serving_endpoint_permissions_enabled` | Manage endpoint ACLs (set `false` where the inference-endpoint ACL feature is unavailable) | `true` |
 | `model_serving_external_endpoints` | Full override of the external endpoint catalog (`null` = load from `model_defaults.yaml`) | `null` |
 | `model_serving_additional_external_endpoints` | Extra external endpoints merged on top of the active set | `{}` |

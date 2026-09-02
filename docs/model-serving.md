@@ -463,6 +463,20 @@ In Databricks SQL, build:
 Wire alerts (Databricks SQL Alerts or Lakehouse Monitoring) on the same
 queries to catch budget breaches and elevated error rates.
 
+### 3.4 Agent-waste alerts (retry loops, silent tool failures)
+
+The module can generate the reliability alerts for you: set
+`model_serving_agent_waste_monitors` (a SQL warehouse ID + recipients)
+and it creates scheduled `databricks_alert_v2` resources — per-requester
+error loops, per-endpoint error rate, attempts against deny-listed
+`databricks-*` endpoints and, opt-in, sessions whose prompts keep carrying
+tool-call errors (the pattern behind Databricks' "$1M/year of wasted agent
+spend" write-up). The SQL is generated from the endpoint catalog and the
+inference-table names above, so it tracks this file's configuration. The
+analysis queries, the `usage_context.session_id` convention they depend
+on, and the tool-fix checklist are in
+[agent-spend-waste.md](agent-spend-waste.md).
+
 ---
 
 ## 4. Calling an endpoint
@@ -593,6 +607,7 @@ The workspace-stack wrapper exposes most of these with a
 | `admin_groups` | list(string) | `[]` | Groups granted CAN_MANAGE on every managed endpoint |
 | `budget_policy_id` | string | `null` | Serverless budget policy attached to endpoints for cost attribution |
 | `databricks_tags` | map(string) | `{}` | Tags stamped on every managed endpoint |
+| `agent_waste_monitors` | object | `null` | Scheduled SQL alerts for retry loops / error rates / blocked-model attempts / tool-error loops (`monitoring.tf`); see [agent-spend-waste.md](agent-spend-waste.md) |
 
 There are **no** foundation-model variables (`foundation_endpoints`,
 `disabled_foundation_models`, …): that governance is YAML-only, applied by
